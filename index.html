@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MELT — turn anything into liquid or letters</title>
+<meta name="description" content="Drop in an image or type something. Watch it melt into a fluid simulation or dissolve into moving ASCII.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>◐</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <canvas id="glcanvas"></canvas>
+  <canvas id="asciicanvas"></canvas>
+
+  <header class="masthead">
+    <h1 class="wordmark">MELT<span class="wordmark-sub">an image, an object, a sentence — liquefied</span></h1>
+  </header>
+
+  <main class="panel" id="panel" aria-label="controls">
+
+    <section class="input-tabs" role="tablist" aria-label="what to melt">
+      <button class="tab" id="tab-image" role="tab" aria-selected="true">image</button>
+      <button class="tab" id="tab-text" role="tab" aria-selected="false">text</button>
+    </section>
+
+    <section class="input-body" id="input-image">
+      <label class="dropzone" id="dropzone" for="file-input">
+        <span class="dz-glyph">↳</span>
+        <span class="dz-label">drop an image, or click to choose</span>
+        <input type="file" id="file-input" accept="image/*" hidden>
+      </label>
+    </section>
+
+    <section class="input-body" id="input-text" hidden>
+      <textarea id="text-input" maxlength="120" placeholder="type a word or a short line…" rows="2"></textarea>
+      <button class="btn btn-secondary" id="text-apply">set as source</button>
+    </section>
+
+    <section class="mode-row">
+      <span class="field-label">effect</span>
+      <div class="seg" id="mode-seg" role="tablist">
+        <button class="seg-btn is-active" data-mode="fluid">fluid</button>
+        <button class="seg-btn" data-mode="ascii">ascii</button>
+        <button class="seg-btn" data-mode="both">both</button>
+      </div>
+    </section>
+
+    <section class="sliders">
+      <label class="slider-row">
+        <span class="field-label">turbulence</span>
+        <input type="range" id="s-turbulence" min="0" max="100" value="45">
+      </label>
+      <label class="slider-row">
+        <span class="field-label">viscosity</span>
+        <input type="range" id="s-viscosity" min="0" max="100" value="20">
+      </label>
+      <label class="slider-row">
+        <span class="field-label">grain</span>
+        <input type="range" id="s-density" min="10" max="100" value="55">
+        <span class="hint" id="density-hint">ascii cell size</span>
+      </label>
+    </section>
+
+    <section class="palette-row">
+      <span class="field-label">palette</span>
+      <div class="swatches" id="palette-seg">
+        <button class="swatch is-active" data-palette="source" style="background:conic-gradient(from 180deg,#ff4da6,#7c5cff,#4dffd3,#ffd24d,#ff4da6)" aria-label="from source image"></button>
+        <button class="swatch" data-palette="bruise" style="background:linear-gradient(135deg,#2b0a3d,#7c5cff,#ff4da6)" aria-label="bruise"></button>
+        <button class="swatch" data-palette="oil" style="background:linear-gradient(135deg,#003b36,#00b39f,#ffd24d)" aria-label="oil slick"></button>
+        <button class="swatch" data-palette="mono" style="background:linear-gradient(135deg,#050506,#e8e6df)" aria-label="monochrome"></button>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button class="btn btn-ghost" id="btn-reset">reset</button>
+      <button class="btn btn-primary" id="btn-save">save frame</button>
+    </section>
+
+  </main>
+
+  <p class="pointer-hint" id="pointer-hint">drag your cursor across the canvas — it stirs the field</p>
+
+  <div class="loading" id="loading" hidden>
+    <span>warming up the field…</span>
+  </div>
+
+</div>
+
+<script src="js/fluid.js"></script>
+<script src="js/ascii.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
