@@ -1,34 +1,173 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#030504"><title>MELT — experimental matter</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#030504">
+  <title>MELT — Experimental Matter</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="app">
-<canvas id="fluid-canvas"></canvas><canvas id="ascii-canvas"></canvas><div class="scanlines"></div><div class="vignette"></div>
-<header class="topbar"><button class="brand" id="brand-reset" type="button"><span>MELT</span><small>/ 01</small></button><div class="system"><i id="status-dot"></i><span id="status-text">FIELD ONLINE</span></div></header>
-<section class="intro"><small>[ 001 ] / DIGITAL MATTER EXPERIMENT</small><h1>MATTER<br><em>IN MOTION</em></h1><p>image / object / sentence<br>transformed into something else</p></section>
-<div class="readout">MELT.FIELD　 X <b id="pointer-x">0000</b>　 Y <b id="pointer-y">0000</b></div>
-<div class="hint" id="pointer-hint"><b>+</b> move across the field to disturb the matter</div>
-<aside class="panel" id="control-panel">
-<div class="panel-head"><div><small>CONTROL / 01</small><h2>INPUT</h2></div><button id="panel-close" type="button">×</button></div>
-<section><label class="section-title"><b>01</b> SOURCE</label><div class="tabs"><button class="source-tab active" id="tab-image" type="button">IMAGE</button><button class="source-tab" id="tab-text" type="button">TEXT</button></div>
-<div id="input-image"><label class="dropzone" id="dropzone" for="file-input"><small>01</small><strong>DROP IMAGE</strong><span>or click to select</span><em>↳</em><input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label><div class="file-meta" id="image-meta" hidden><span id="image-name">no file</span><button id="image-clear" type="button">CLEAR</button></div></div>
-<div id="input-text" hidden><textarea id="text-input" maxlength="120" rows="4" placeholder="type something..." spellcheck="false"></textarea><div class="textarea-foot"><span id="text-count">0 / 120</span><button id="text-apply" type="button">INJECT</button></div></div></section>
-<section><label class="section-title"><b>02</b> RENDER MODE</label><div class="modes"><button class="mode active" data-mode="fluid" type="button">01 <span>FLUID</span></button><button class="mode" data-mode="ascii" type="button">02 <span>ASCII</span></button><button class="mode" data-mode="both" type="button">03 <span>BOTH</span></button></div></section>
-<section><label class="section-title"><b>03</b> FIELD</label>
-<label class="param"><span>TURBULENCE <output id="turbulence-value">45</output></span><input id="s-turbulence" type="range" min="0" max="100" value="45"></label>
-<label class="param"><span>VISCOSITY <output id="viscosity-value">20</output></span><input id="s-viscosity" type="range" min="0" max="100" value="20"></label>
-<label class="param"><span id="density-label">GRAIN <output id="density-value">55</output></span><input id="s-density" type="range" min="10" max="100" value="55"><small id="density-hint">controls field density</small></label></section>
-<section><label class="section-title"><b>04</b> PALETTE <small>EDIT CSS</small></label><div class="palettes"><button class="palette active" data-palette="source" type="button"></button><button class="palette" data-palette="matrix" type="button"></button><button class="palette" data-palette="amber" type="button"></button><button class="palette" data-palette="mono" type="button"></button></div></section>
-<div class="actions"><button id="btn-reset" type="button">↻ RESET</button><button id="btn-save" type="button">↓ SAVE FRAME</button></div><footer><span>MELT / EXPERIMENTAL MEDIA</span><span id="fps-counter">-- FPS</span></footer>
-</aside>
-<button id="panel-toggle" class="panel-toggle" type="button"><i></i><i></i></button>
-<div class="boot" id="boot"><div><strong>MELT</strong><div><i id="boot-progress"></i></div><p><span id="boot-text">creating field...</span><span id="boot-percent">00%</span></p></div></div>
-<div class="error" id="error" hidden><small>ERROR / 001</small><strong>FIELD FAILED</strong><p id="error-text"></p><button id="error-retry" type="button">RETRY</button></div>
-</div><script src="fluid.js"></script>
-</body></html>
+  <main id="app">
+    <canvas id="fluid-canvas"></canvas>
+    <canvas id="ascii-canvas"></canvas>
+
+    <div class="screen-grid"></div>
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <header class="topbar">
+      <button class="brand" id="brand-reset" type="button" aria-label="Reset MELT">
+        <span>MELT</span>
+        <small>/ 01</small>
+      </button>
+
+      <div class="status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">FIELD ONLINE</span>
+      </div>
+    </header>
+
+    <section class="hero" aria-hidden="true">
+      <span class="eyebrow">[ 001 ] / DIGITAL MATTER EXPERIMENT</span>
+      <h1>MATTER<br><em>IN MOTION</em></h1>
+      <p>image / object / sentence<br>transformed into something else</p>
+    </section>
+
+    <div class="coordinate-readout">
+      MELT.FIELD &nbsp; X <b id="pointer-x">0000</b>
+      &nbsp; Y <b id="pointer-y">0000</b>
+    </div>
+
+    <div class="interaction-hint" id="pointer-hint">
+      <b>+</b> MOVE ACROSS THE FIELD TO DISTURB THE MATTER
+    </div>
+
+    <aside class="control-panel" id="control-panel">
+      <div class="panel-heading">
+        <div>
+          <span>CONTROL / 01</span>
+          <h2>INPUT</h2>
+        </div>
+        <button id="panel-close" class="icon-button" type="button" aria-label="Close controls">×</button>
+      </div>
+
+      <section class="control-section">
+        <div class="section-label"><b>01</b> SOURCE</div>
+
+        <div class="tabs">
+          <button class="source-tab active" id="tab-image" type="button">IMAGE</button>
+          <button class="source-tab" id="tab-text" type="button">TEXT</button>
+        </div>
+
+        <div id="input-image">
+          <label class="dropzone" id="dropzone" for="file-input">
+            <span class="drop-number">01</span>
+            <strong>DROP IMAGE</strong>
+            <small>or click to select</small>
+            <em>↳</em>
+            <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+          </label>
+
+          <div class="file-meta" id="image-meta" hidden>
+            <span id="image-name">no file</span>
+            <button id="image-clear" type="button">CLEAR</button>
+          </div>
+        </div>
+
+        <div id="input-text" hidden>
+          <textarea id="text-input" maxlength="120" rows="4" spellcheck="false" placeholder="TYPE SOMETHING..."></textarea>
+          <div class="textarea-footer">
+            <span id="text-count">0 / 120</span>
+            <button id="text-apply" type="button">INJECT</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-section">
+        <div class="section-label"><b>02</b> RENDER MODE</div>
+
+        <div class="mode-grid">
+          <button class="mode active" data-mode="fluid" type="button"><b>01</b><span>FLUID</span></button>
+          <button class="mode" data-mode="ascii" type="button"><b>02</b><span>ASCII</span></button>
+          <button class="mode" data-mode="both" type="button"><b>03</b><span>BOTH</span></button>
+        </div>
+      </section>
+
+      <section class="control-section">
+        <div class="section-label"><b>03</b> FIELD</div>
+
+        <label class="slider-row">
+          <span>TURBULENCE <output id="turbulence-value">45</output></span>
+          <input id="s-turbulence" type="range" min="0" max="100" value="45">
+        </label>
+
+        <label class="slider-row">
+          <span>VISCOSITY <output id="viscosity-value">20</output></span>
+          <input id="s-viscosity" type="range" min="0" max="100" value="20">
+        </label>
+
+        <label class="slider-row">
+          <span id="density-label">GRAIN <output id="density-value">55</output></span>
+          <input id="s-density" type="range" min="10" max="100" value="55">
+          <small id="density-hint">controls particle density</small>
+        </label>
+      </section>
+
+      <section class="control-section">
+        <div class="section-label">
+          <b>04</b> PALETTE
+          <small>EDIT CSS</small>
+        </div>
+
+        <div class="palette-grid">
+          <button class="palette active palette-source" data-palette="source" type="button" aria-label="Source colors"></button>
+          <button class="palette palette-matrix" data-palette="matrix" type="button" aria-label="Matrix palette"></button>
+          <button class="palette palette-amber" data-palette="amber" type="button" aria-label="Amber palette"></button>
+          <button class="palette palette-mono" data-palette="mono" type="button" aria-label="Monochrome palette"></button>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="btn-reset" type="button">↻ RESET</button>
+        <button id="btn-save" type="button">↓ SAVE FRAME</button>
+      </div>
+
+      <footer class="panel-footer">
+        <span>MELT / EXPERIMENTAL MEDIA</span>
+        <span id="fps-counter">-- FPS</span>
+      </footer>
+    </aside>
+
+    <button id="panel-toggle" class="panel-toggle" type="button" aria-label="Open controls" aria-expanded="true">
+      <span></span>
+      <span></span>
+    </button>
+
+    <div class="boot-screen" id="boot">
+      <div class="boot-box">
+        <strong>MELT</strong>
+        <div class="boot-bar"><i id="boot-progress"></i></div>
+        <p>
+          <span id="boot-text">CREATING FIELD...</span>
+          <span id="boot-percent">00%</span>
+        </p>
+      </div>
+    </div>
+
+    <div class="error-screen" id="error" hidden>
+      <span>ERROR / 001</span>
+      <strong>FIELD FAILED</strong>
+      <p id="error-text">Something went wrong.</p>
+      <button id="error-retry" type="button">RETRY</button>
+    </div>
+  </main>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
