@@ -1,2581 +1,1407 @@
-/* =========================================================
-   MELT
-   Experimental image / text liquefaction engine
+/*
+  MELT / SCRIPT
+  Canvas 2D renderer — no WebGL, no external JavaScript libraries.
 
-   Effects:
-   - FLUID
-   - ASCII
-   - BOTH
+  This file is designed specifically for the matching MELT index.html
+  and style.css.
 
-   Designed so additional effects can be added later:
-   - BITS
-   - PIXELS
-   - HALFTONE
-   - DISPLACE
-   - etc.
-========================================================= */
+  IMPORTANT:
+  Do not rename this file to fluid.js unless you also change the
+  <script src="script.js"> line in index.html.
+*/
 
 (() => {
   "use strict";
 
-  /* =======================================================
-     USER CUSTOMIZATION AREA
-     -----------------------------------------------
-     This is intentionally separated from the engine.
-  ======================================================= */
+  // ============================================================
+  // CONFIGURATION
+  // ============================================================
 
-  const MELT_CONFIG = {
-
-    palettes: {
-
-      source: {
-        name: "SOURCE"
-      },
-
-      matrix: {
-        name: "MATRIX"
-      },
-
-      monochrome: {
-        name: "MONO"
-      },
-
-      amber: {
-        name: "AMBER"
-      }
-
+  const CONFIG = {
+    particles: {
+      base: 2200,
+      max: 8500,
+      ambient: 650,
+      size: 1.35,
+      field: 0.055,
+      home: 0.00085,
+      trail: 0.105,
+      mouseRadius: 175,
+      mouseForce: 1.9
     },
 
     ascii: {
-      characters: " .,:;irsXA253hMHGS#9B&@",
+      chars: " .,:;irsXA253hMHGS#9B&@",
       minCell: 5,
-      maxCell: 18
+      maxCell: 17,
+      distortion: 28
     },
 
-    fluid: {
-      simulationResolution: 128,
-      dyeResolution: 512,
+    palettes: {
+      matrix: [
+        [215, 255, 225],
+        [125, 255, 171],
+        [45, 190, 93],
+        [8, 45, 20]
+      ],
 
-      curl: 18,
-      velocityDissipation: 0.15,
-      dyeDissipation: 0.65,
+      amber: [
+        [255, 244, 171],
+        [255, 181, 47],
+        [190, 91, 18],
+        [48, 18, 3]
+      ],
 
-      pressureIterations: 12,
-
-      splatRadius: 0.16,
-
-      ambientStrength: 0.08
+      mono: [
+        [245, 245, 240],
+        [175, 175, 170],
+        [95, 95, 92],
+        [28, 28, 27]
+      ]
     }
-
   };
 
 
-  /* =======================================================
-     SHADERS
-  ======================================================= */
+  // ============================================================
+  // DOM REFERENCES
+  // ============================================================
 
-  const VERT = `#version 300 es
+  const $ = (id) => document.getElementById(id);
 
-    precision highp float;
+  const fluidCanvas = $("fluid-canvas");
+  const asciiCanvas = $("ascii-canvas");
 
-    layout(location = 0) in vec2 aPosition;
+  if (!fluidCanvas || !asciiCanvas) {
+    console.error("MELT: required canvas elements were not found.");
+    return;
+  }
 
-    out vec2 vUv;
-    out vec2 vL;
-    out vec2 vR;
-    out vec2 vT;
-    out vec2 vB;
+  const fluid = fluidCanvas.getContext("2d", {
+    alpha: false
+  });
 
-    uniform vec2 texelSize;
+  const ascii = asciiCanvas.getContext("2d", {
+    alpha: true
+  });
 
-    void main() {
+  const sourceCanvas = document.createElement("canvas");
+  const source = sourceCanvas.getContext("2d", {
+    willReadFrequently: true
+  });
 
-      vUv = aPosition * 0.5 + 0.5;
 
-      vL = vUv - vec2(texelSize.x, 0.0);
-      vR = vUv + vec2(texelSize.x, 0.0);
+  // ============================================================
+  // UI REFERENCES
+  // ============================================================
 
-      vT = vUv + vec2(0.0, texelSize.y);
-      vB = vUv - vec2(0.0, texelSize.y);
+  const boot = $("boot");
+  const bootProgress = $("boot-progress");
+  const bootText = $("boot-text");
+  const bootPercent = $("boot-percent");
 
-      gl_Position = vec4(aPosition, 0.0, 1.0);
+  const errorScreen = $("error");
+  const errorText = $("error-text");
+
+  const statusText = $("status-text");
+  const statusDot = $("status-dot");
+
+  const fileInput = $("file-input");
+  const dropzone = $("dropzone");
+  const imageMeta = $("image-meta");
+  const imageName = $("image-name");
+  const imageClear = $("image-clear");
+
+  const textInput = $("text-input");
+  const textApply = $("text-apply");
+  const textCount = $("text-count");
+
+  const pointerX = $("pointer-x");
+  const pointerY = $("pointer-y");
+  const pointerHint = $("pointer-hint");
+
+  const panel = $("control-panel");
+  const panelClose = $("panel-close");
+  const panelToggle = $("panel-toggle");
+
+  const turbulence = $("s-turbulence");
+  const viscosity = $("s-viscosity");
+  const density = $("s-density");
+
+  const turbulenceValue = $("turbulence-value");
+  const viscosityValue = $("viscosity-value");
+  const densityValue = $("density-value");
+
+  const densityLabel = $("density-label");
+  const densityHint = $("density-hint");
+
+  const resetButton = $("btn-reset");
+  const saveButton = $("btn-save");
+  const brandReset = $("brand-reset");
+
+  const fpsCounter = $("fps-counter");
+
+
+  // ============================================================
+  // STATE
+  // ============================================================
+
+  const state = {
+    width: 1,
+    height: 1,
+    dpr: 1,
+
+    mode: "fluid",
+    palette: "source",
+    sourceType: "text",
+
+    dirty: true,
+
+    turbulence: 45,
+    viscosity: 20,
+    density: 55,
+
+    particles: [],
+    ambient: [],
+
+    time: 0,
+    lastTime: performance.now(),
+
+    frameCount: 0,
+    fpsClock: performance.now(),
+
+    mouse: {
+      x: 0,
+      y: 0,
+
+      previousX: 0,
+      previousY: 0,
+
+      velocityX: 0,
+      velocityY: 0,
+
+      active: false
     }
-  `;
+  };
 
 
-  const HEADER = `#version 300 es
+  // ============================================================
+  // UTILITY FUNCTIONS
+  // ============================================================
 
-    precision highp float;
-    precision highp sampler2D;
-  `;
+  const clamp = (value, min, max) => {
+    return Math.max(min, Math.min(max, value));
+  };
 
 
-  const COPY = HEADER + `
+  const lerp = (a, b, amount) => {
+    return a + (b - a) * amount;
+  };
 
-    in vec2 vUv;
 
-    uniform sampler2D uTexture;
+  const random = (min = 0, max = 1) => {
+    return min + Math.random() * (max - min);
+  };
 
-    out vec4 fragColor;
 
-    void main() {
-      fragColor = texture(uTexture, vUv);
+  function setStatus(message, ok = true) {
+    if (statusText) {
+      statusText.textContent = message;
     }
-  `;
 
-
-  const CLEAR = HEADER + `
-
-    in vec2 vUv;
-
-    uniform sampler2D uTexture;
-    uniform float value;
-
-    out vec4 fragColor;
-
-    void main() {
-      fragColor = value * texture(uTexture, vUv);
+    if (statusDot) {
+      statusDot.style.background =
+        ok ? "var(--green)" : "var(--red)";
     }
-  `;
+  }
 
 
-  const SPLAT = HEADER + `
-
-    in vec2 vUv;
-
-    uniform sampler2D uTarget;
-
-    uniform float aspectRatio;
-    uniform vec3 color;
-
-    uniform vec2 point;
-    uniform float radius;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      vec2 p = vUv - point;
-
-      p.x *= aspectRatio;
-
-      float strength =
-        exp(-dot(p, p) / radius);
-
-      vec3 base =
-        texture(uTarget, vUv).xyz;
-
-      fragColor =
-        vec4(base + strength * color, 1.0);
+  function setBoot(progress, message) {
+    if (!bootProgress || !bootText || !bootPercent) {
+      return;
     }
-  `;
 
+    const amount = clamp(progress, 0, 1);
 
-  const ADVECTION = HEADER + `
+    bootProgress.style.width =
+      `${amount * 100}%`;
 
-    in vec2 vUv;
+    bootPercent.textContent =
+      `${String(Math.round(amount * 100)).padStart(2, "0")}%`;
 
-    uniform sampler2D uVelocity;
-    uniform sampler2D uSource;
+    bootText.textContent = message;
+  }
 
-    uniform vec2 texelSize;
 
-    uniform float dt;
-    uniform float dissipation;
+  // ============================================================
+  // CANVAS RESIZE
+  // ============================================================
 
-    out vec4 fragColor;
+  function resize() {
+    state.width = window.innerWidth;
+    state.height = window.innerHeight;
 
-    void main() {
-
-      vec2 coord =
-        vUv -
-        dt *
-        texture(uVelocity, vUv).xy *
-        texelSize;
-
-      vec4 result =
-        texture(uSource, coord);
-
-      float decay =
-        1.0 +
-        dissipation *
-        dt;
-
-      fragColor =
-        result / decay;
-    }
-  `;
-
-
-  const DIVERGENCE = HEADER + `
-
-    in vec2 vUv;
-    in vec2 vL;
-    in vec2 vR;
-    in vec2 vT;
-    in vec2 vB;
-
-    uniform sampler2D uVelocity;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      float L =
-        texture(uVelocity, vL).x;
-
-      float R =
-        texture(uVelocity, vR).x;
-
-      float T =
-        texture(uVelocity, vT).y;
-
-      float B =
-        texture(uVelocity, vB).y;
-
-      vec2 C =
-        texture(uVelocity, vUv).xy;
-
-      if (vL.x < 0.0)
-        L = -C.x;
-
-      if (vR.x > 1.0)
-        R = -C.x;
-
-      if (vT.y > 1.0)
-        T = -C.y;
-
-      if (vB.y < 0.0)
-        B = -C.y;
-
-      float div =
-        0.5 *
-        (R - L + T - B);
-
-      fragColor =
-        vec4(div, 0.0, 0.0, 1.0);
-    }
-  `;
-
-
-  const CURL = HEADER + `
-
-    in vec2 vUv;
-    in vec2 vL;
-    in vec2 vR;
-    in vec2 vT;
-    in vec2 vB;
-
-    uniform sampler2D uVelocity;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      float L =
-        texture(uVelocity, vL).y;
-
-      float R =
-        texture(uVelocity, vR).y;
-
-      float T =
-        texture(uVelocity, vT).x;
-
-      float B =
-        texture(uVelocity, vB).x;
-
-      float curl =
-        R - L - T + B;
-
-      fragColor =
-        vec4(0.5 * curl, 0.0, 0.0, 1.0);
-    }
-  `;
-
-
-  const VORTICITY = HEADER + `
-
-    in vec2 vUv;
-    in vec2 vL;
-    in vec2 vR;
-    in vec2 vT;
-    in vec2 vB;
-
-    uniform sampler2D uVelocity;
-    uniform sampler2D uCurl;
-
-    uniform float curl;
-    uniform float dt;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      float L =
-        texture(uCurl, vL).x;
-
-      float R =
-        texture(uCurl, vR).x;
-
-      float T =
-        texture(uCurl, vT).x;
-
-      float B =
-        texture(uCurl, vB).x;
-
-      float C =
-        texture(uCurl, vUv).x;
-
-      vec2 force =
-        0.5 *
-        vec2(
-          abs(T) - abs(B),
-          abs(R) - abs(L)
-        );
-
-      force /=
-        length(force) + 0.0001;
-
-      force *=
-        curl * C;
-
-      force.y *= -1.0;
-
-      vec2 vel =
-        texture(uVelocity, vUv).xy;
-
-      fragColor =
-        vec4(
-          vel + force * dt,
-          0.0,
-          1.0
-        );
-    }
-  `;
-
-
-  const PRESSURE = HEADER + `
-
-    in vec2 vUv;
-    in vec2 vL;
-    in vec2 vR;
-    in vec2 vT;
-    in vec2 vB;
-
-    uniform sampler2D uPressure;
-    uniform sampler2D uDivergence;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      float L =
-        texture(uPressure, vL).x;
-
-      float R =
-        texture(uPressure, vR).x;
-
-      float T =
-        texture(uPressure, vT).x;
-
-      float B =
-        texture(uPressure, vB).x;
-
-      float divergence =
-        texture(uDivergence, vUv).x;
-
-      float pressure =
-        (L + R + B + T - divergence)
-        * 0.25;
-
-      fragColor =
-        vec4(
-          pressure,
-          0.0,
-          0.0,
-          1.0
-        );
-    }
-  `;
-
-
-  const GRADIENT = HEADER + `
-
-    in vec2 vUv;
-    in vec2 vL;
-    in vec2 vR;
-    in vec2 vT;
-    in vec2 vB;
-
-    uniform sampler2D uPressure;
-    uniform sampler2D uVelocity;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      float L =
-        texture(uPressure, vL).x;
-
-      float R =
-        texture(uPressure, vR).x;
-
-      float T =
-        texture(uPressure, vT).x;
-
-      float B =
-        texture(uPressure, vB).x;
-
-      vec2 velocity =
-        texture(uVelocity, vUv).xy;
-
-      velocity -=
-        vec2(
-          R - L,
-          T - B
-        );
-
-      fragColor =
-        vec4(
-          velocity,
-          0.0,
-          1.0
-        );
-    }
-  `;
-
-
-  const DISPLAY = HEADER + `
-
-    in vec2 vUv;
-
-    uniform sampler2D uTexture;
-
-    uniform int uPalette;
-
-    out vec4 fragColor;
-
-    void main() {
-
-      vec4 c =
-        texture(uTexture, vUv);
-
-      float lum =
-        dot(
-          c.rgb,
-          vec3(
-            0.299,
-            0.587,
-            0.114
-          )
-        );
-
-      vec3 col;
-
-      if (uPalette == 1) {
-
-        // matrix
-        col =
-          vec3(
-            0.02,
-            0.35,
-            0.11
-          )
-          *
-          (0.25 + lum * 2.2);
-
-      } else if (uPalette == 2) {
-
-        // monochrome
-        col =
-          vec3(lum);
-
-      } else if (uPalette == 3) {
-
-        // amber
-        col =
-          vec3(
-            lum * 1.0,
-            lum * 0.55,
-            lum * 0.08
-          );
-
-      } else {
-
-        // source / default
-        col =
-          c.rgb;
-      }
-
-      fragColor =
-        vec4(col, 1.0);
-    }
-  `;
-
-
-  /* =======================================================
-     WEBGL HELPERS
-  ======================================================= */
-
-  function compileShader(gl, type, source) {
-
-    const shader =
-      gl.createShader(type);
-
-    gl.shaderSource(
-      shader,
-      source
+    state.dpr = Math.min(
+      window.devicePixelRatio || 1,
+      2
     );
 
-    gl.compileShader(shader);
+    const pixelWidth = Math.max(
+      1,
+      Math.floor(state.width * state.dpr)
+    );
 
-    if (!gl.getShaderParameter(
-      shader,
-      gl.COMPILE_STATUS
-    )) {
+    const pixelHeight = Math.max(
+      1,
+      Math.floor(state.height * state.dpr)
+    );
 
-      const info =
-        gl.getShaderInfoLog(shader);
+    [fluidCanvas, asciiCanvas].forEach((canvas) => {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
 
-      gl.deleteShader(shader);
+      canvas.style.width =
+        `${state.width}px`;
 
-      throw new Error(
-        "Shader error:\n" + info
-      );
-    }
+      canvas.style.height =
+        `${state.height}px`;
+    });
 
-    return shader;
+    fluid.setTransform(
+      state.dpr,
+      0,
+      0,
+      state.dpr,
+      0,
+      0
+    );
+
+    ascii.setTransform(
+      state.dpr,
+      0,
+      0,
+      state.dpr,
+      0,
+      0
+    );
+
+    state.dirty = true;
   }
 
 
-  class Program {
+  // ============================================================
+  // SOURCE CANVAS
+  // ============================================================
 
-    constructor(gl, vert, frag) {
+  function clearSource() {
+    sourceCanvas.width = 700;
+    sourceCanvas.height = 500;
 
-      this.gl = gl;
-
-      const vs =
-        compileShader(
-          gl,
-          gl.VERTEX_SHADER,
-          vert
-        );
-
-      const fs =
-        compileShader(
-          gl,
-          gl.FRAGMENT_SHADER,
-          frag
-        );
-
-      this.program =
-        gl.createProgram();
-
-      gl.attachShader(
-        this.program,
-        vs
-      );
-
-      gl.attachShader(
-        this.program,
-        fs
-      );
-
-      gl.linkProgram(
-        this.program
-      );
-
-      if (!gl.getProgramParameter(
-        this.program,
-        gl.LINK_STATUS
-      )) {
-
-        throw new Error(
-          "Program link error:\n" +
-          gl.getProgramInfoLog(
-            this.program
-          )
-        );
-      }
-
-      this.uniforms = {};
-
-      const count =
-        gl.getProgramParameter(
-          this.program,
-          gl.ACTIVE_UNIFORMS
-        );
-
-      for (let i = 0; i < count; i++) {
-
-        const info =
-          gl.getActiveUniform(
-            this.program,
-            i
-          );
-
-        this.uniforms[info.name] =
-          gl.getUniformLocation(
-            this.program,
-            info.name
-          );
-      }
-    }
-
-    bind() {
-
-      this.gl.useProgram(
-        this.program
-      );
-    }
-
-    set1i(name, value) {
-
-      const location =
-        this.uniforms[name];
-
-      if (location !== null &&
-          location !== undefined) {
-
-        this.gl.uniform1i(
-          location,
-          value
-        );
-      }
-    }
-
-    set1f(name, value) {
-
-      const location =
-        this.uniforms[name];
-
-      if (location !== null &&
-          location !== undefined) {
-
-        this.gl.uniform1f(
-          location,
-          value
-        );
-      }
-    }
-
-    set2f(name, a, b) {
-
-      const location =
-        this.uniforms[name];
-
-      if (location !== null &&
-          location !== undefined) {
-
-        this.gl.uniform2f(
-          location,
-          a,
-          b
-        );
-      }
-    }
-
-    set3f(name, a, b, c) {
-
-      const location =
-        this.uniforms[name];
-
-      if (location !== null &&
-          location !== undefined) {
-
-        this.gl.uniform3f(
-          location,
-          a,
-          b,
-          c
-        );
-      }
-    }
+    source.fillStyle = "#000000";
+    source.fillRect(
+      0,
+      0,
+      700,
+      500
+    );
   }
 
 
-  /* =======================================================
-     FLUID SIMULATION
-  ======================================================= */
+  function createTextSource(value = "MELT") {
+    clearSource();
 
-  class FluidSim {
+    const text =
+      value.trim() || "MELT";
 
-    constructor(canvas) {
+    let size = 155;
 
-      this.canvas = canvas;
-
-      this.supported = false;
-
-      const gl =
-        canvas.getContext(
-          "webgl2",
-          {
-            alpha: false,
-            antialias: false,
-            depth: false,
-            stencil: false,
-            preserveDrawingBuffer: true
-          }
-        );
-
-      if (!gl)
-        return;
-
-      const floatExtension =
-        gl.getExtension(
-          "EXT_color_buffer_float"
-        );
-
-      if (!floatExtension)
-        return;
-
-      gl.getExtension(
-        "OES_texture_float_linear"
-      );
-
-      this.gl = gl;
-
-      this.type =
-        gl.HALF_FLOAT;
-
-      this.internalFormatRGBA =
-        gl.RGBA16F;
-
-      this.internalFormatR =
-        gl.R16F;
-
-      this.supported = true;
-
-      const config =
-        MELT_CONFIG.fluid;
-
-      this.simRes =
-        config.simulationResolution;
-
-      this.dyeRes =
-        config.dyeResolution;
-
-      this.params = {
-
-        curl: config.curl,
-
-        velocityDissipation:
-          config.velocityDissipation,
-
-        dyeDissipation:
-          config.dyeDissipation,
-
-        pressureIterations:
-          config.pressureIterations,
-
-        splatRadius:
-          config.splatRadius
-      };
-
-      this._createQuad();
-
-      this._compile();
-
-      this._allocate();
-
-      this._ambientPhase =
-        Math.random() * 1000;
-
-      this._sourceImageEl = null;
-    }
-
-
-    _createQuad() {
-
-      const gl = this.gl;
-
-      this.vao =
-        gl.createVertexArray();
-
-      gl.bindVertexArray(
-        this.vao
-      );
-
-      const vertices =
-        new Float32Array([
-          -1, -1,
-          -1,  1,
-           1,  1,
-           1, -1
-        ]);
-
-      const indices =
-        new Uint16Array([
-          0, 1, 2,
-          0, 2, 3
-        ]);
-
-      const buffer =
-        gl.createBuffer();
-
-      gl.bindBuffer(
-        gl.ARRAY_BUFFER,
-        buffer
-      );
-
-      gl.bufferData(
-        gl.ARRAY_BUFFER,
-        vertices,
-        gl.STATIC_DRAW
-      );
-
-      gl.enableVertexAttribArray(0);
-
-      gl.vertexAttribPointer(
-        0,
-        2,
-        gl.FLOAT,
-        false,
-        0,
-        0
-      );
-
-      const element =
-        gl.createBuffer();
-
-      gl.bindBuffer(
-        gl.ELEMENT_ARRAY_BUFFER,
-        element
-      );
-
-      gl.bufferData(
-        gl.ELEMENT_ARRAY_BUFFER,
-        indices,
-        gl.STATIC_DRAW
-      );
-
-      gl.bindVertexArray(null);
-    }
-
-
-    _draw() {
-
-      const gl = this.gl;
-
-      gl.bindVertexArray(
-        this.vao
-      );
-
-      gl.drawElements(
-        gl.TRIANGLES,
-        6,
-        gl.UNSIGNED_SHORT,
-        0
-      );
-
-      gl.bindVertexArray(null);
-    }
-
-
-    _compile() {
-
-      const gl = this.gl;
-
-      this.copy =
-        new Program(
-          gl,
-          VERT,
-          COPY
-        );
-
-      this.clear =
-        new Program(
-          gl,
-          VERT,
-          CLEAR
-        );
-
-      this.splatProgram =
-        new Program(
-          gl,
-          VERT,
-          SPLAT
-        );
-
-      this.advection =
-        new Program(
-          gl,
-          VERT,
-          ADVECTION
-        );
-
-      this.divergence =
-        new Program(
-          gl,
-          VERT,
-          DIVERGENCE
-        );
-
-      this.curl =
-        new Program(
-          gl,
-          VERT,
-          CURL
-        );
-
-      this.vorticity =
-        new Program(
-          gl,
-          VERT,
-          VORTICITY
-        );
-
-      this.pressure =
-        new Program(
-          gl,
-          VERT,
-          PRESSURE
-        );
-
-      this.gradient =
-        new Program(
-          gl,
-          VERT,
-          GRADIENT
-        );
-
-      this.display =
-        new Program(
-          gl,
-          VERT,
-          DISPLAY
-        );
-    }
-
-
-    _createFBO(
-      w,
-      h,
-      internalFormat,
-      format,
-      type,
-      filter
-    ) {
-
-      const gl = this.gl;
-
-      const texture =
-        gl.createTexture();
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        texture
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_MIN_FILTER,
-        filter
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_MAG_FILTER,
-        filter
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_WRAP_S,
-        gl.CLAMP_TO_EDGE
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_WRAP_T,
-        gl.CLAMP_TO_EDGE
-      );
-
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        internalFormat,
-        w,
-        h,
-        0,
-        format,
-        type,
-        null
-      );
-
-      const fbo =
-        gl.createFramebuffer();
-
-      gl.bindFramebuffer(
-        gl.FRAMEBUFFER,
-        fbo
-      );
-
-      gl.framebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0,
-        gl.TEXTURE_2D,
-        texture,
-        0
-      );
-
-      const status =
-        gl.checkFramebufferStatus(
-          gl.FRAMEBUFFER
-        );
+    while (size > 35) {
+      source.font =
+        `600 ${size}px "Space Grotesk", Arial, sans-serif`;
 
       if (
-        status !==
-        gl.FRAMEBUFFER_COMPLETE
+        source.measureText(text).width <= 620
       ) {
-
-        console.warn(
-          "MELT FBO incomplete:",
-          status,
-          w,
-          h
-        );
+        break;
       }
 
-      return {
-        texture,
-        fbo,
-        width: w,
-        height: h,
-        texelSizeX: 1 / w,
-        texelSizeY: 1 / h
-      };
+      size -= 4;
     }
 
+    source.textAlign = "center";
+    source.textBaseline = "middle";
 
-    _doubleFBO(
-      w,
-      h,
-      internalFormat,
-      format,
-      type,
-      filter
+    source.fillStyle = "#ffffff";
+
+    source.fillText(
+      text,
+      350,
+      250
+    );
+
+    state.sourceType = "text";
+    state.dirty = true;
+  }
+
+
+  function createImageSource(image) {
+    clearSource();
+
+    const scale = Math.min(
+      650 / image.width,
+      450 / image.height
+    );
+
+    const width =
+      image.width * scale;
+
+    const height =
+      image.height * scale;
+
+    source.drawImage(
+      image,
+
+      350 - width / 2,
+      250 - height / 2,
+
+      width,
+      height
+    );
+
+    state.sourceType = "image";
+    state.dirty = true;
+  }
+
+
+  // ============================================================
+  // SAMPLE SOURCE IMAGE
+  // ============================================================
+
+  function getSourceSamples() {
+    const pixels =
+      source.getImageData(
+        0,
+        0,
+        700,
+        500
+      ).data;
+
+    const samples = [];
+
+    const desired =
+      Math.floor(
+        CONFIG.particles.base +
+        (state.density / 100) *
+        (
+          CONFIG.particles.max -
+          CONFIG.particles.base
+        )
+      );
+
+    const step = Math.max(
+      3,
+      Math.floor(
+        Math.sqrt(
+          350000 /
+          (desired * 1.7)
+        )
+      )
+    );
+
+    for (
+      let y = 0;
+      y < 500;
+      y += step
     ) {
-
-      let a =
-        this._createFBO(
-          w,
-          h,
-          internalFormat,
-          format,
-          type,
-          filter
-        );
-
-      let b =
-        this._createFBO(
-          w,
-          h,
-          internalFormat,
-          format,
-          type,
-          filter
-        );
-
-      return {
-
-        get read() {
-          return a;
-        },
-
-        get write() {
-          return b;
-        },
-
-        swap() {
-          const temp = a;
-          a = b;
-          b = temp;
-        },
-
-        width: w,
-        height: h,
-
-        texelSizeX: 1 / w,
-        texelSizeY: 1 / h
-      };
-    }
-
-
-    _allocate() {
-
-      const aspect =
-        this.canvas.clientWidth /
-        Math.max(
-          1,
-          this.canvas.clientHeight
-        );
-
-      const s =
-        this.simRes;
-
-      const d =
-        this.dyeRes;
-
-      const simW =
-        aspect >= 1
-          ? s
-          : Math.max(
-              1,
-              Math.round(s * aspect)
-            );
-
-      const simH =
-        aspect >= 1
-          ? Math.max(
-              1,
-              Math.round(s / aspect)
-            )
-          : s;
-
-      const dyeW =
-        aspect >= 1
-          ? d
-          : Math.max(
-              1,
-              Math.round(d * aspect)
-            );
-
-      const dyeH =
-        aspect >= 1
-          ? Math.max(
-              1,
-              Math.round(d / aspect)
-            )
-          : d;
-
-      const gl = this.gl;
-
-      this.velocity =
-        this._doubleFBO(
-          simW,
-          simH,
-          this.internalFormatRGBA,
-          gl.RGBA,
-          this.type,
-          gl.LINEAR
-        );
-
-      this.pressure =
-        this._doubleFBO(
-          simW,
-          simH,
-          this.internalFormatR,
-          gl.RED,
-          this.type,
-          gl.NEAREST
-        );
-
-      this.divergenceFBO =
-        this._createFBO(
-          simW,
-          simH,
-          this.internalFormatR,
-          gl.RED,
-          this.type,
-          gl.NEAREST
-        );
-
-      this.curlFBO =
-        this._createFBO(
-          simW,
-          simH,
-          this.internalFormatR,
-          gl.RED,
-          this.type,
-          gl.NEAREST
-        );
-
-      this.dye =
-        this._doubleFBO(
-          dyeW,
-          dyeH,
-          this.internalFormatRGBA,
-          gl.RGBA,
-          this.type,
-          gl.LINEAR
-        );
-
-      this.sourceFBO =
-        this._createFBO(
-          dyeW,
-          dyeH,
-          this.internalFormatRGBA,
-          gl.RGBA,
-          this.type,
-          gl.LINEAR
-        );
-
-      this.aspect =
-        aspect;
-    }
-
-
-    resize() {
-
-      const dpr =
-        Math.min(
-          window.devicePixelRatio || 1,
-          2
-        );
-
-      const w =
-        Math.max(
-          1,
-          Math.round(
-            this.canvas.clientWidth *
-            dpr
-          )
-        );
-
-      const h =
-        Math.max(
-          1,
-          Math.round(
-            this.canvas.clientHeight *
-            dpr
-          )
-        );
-
-      if (
-        this.canvas.width !== w ||
-        this.canvas.height !== h
+      for (
+        let x = 0;
+        x < 700;
+        x += step
       ) {
+        const index =
+          (y * 700 + x) * 4;
 
-        this.canvas.width = w;
-        this.canvas.height = h;
+        const r = pixels[index];
+        const g = pixels[index + 1];
+        const b = pixels[index + 2];
+        const alpha = pixels[index + 3];
 
-        this._allocate();
+        const luminance =
+          (r + g + b) / 3;
 
         if (
-          this._sourceImageEl
+          alpha > 25 &&
+          luminance > 12
         ) {
-
-          this.setSourceImage(
-            this._sourceImageEl
-          );
+          samples.push({
+            x,
+            y,
+            r,
+            g,
+            b,
+            luminance
+          });
         }
       }
     }
 
+    return samples;
+  }
 
-    _blit(fbo) {
 
-      const gl = this.gl;
+  // ============================================================
+  // COLOR SYSTEM
+  // ============================================================
 
-      gl.bindFramebuffer(
-        gl.FRAMEBUFFER,
-        fbo
-      );
-
-      this._draw();
+  function getColor(sample) {
+    if (state.palette === "source") {
+      return `rgb(
+        ${sample.r},
+        ${sample.g},
+        ${sample.b}
+      )`;
     }
 
+    const stops =
+      CONFIG.palettes[state.palette] ||
+      CONFIG.palettes.matrix;
 
-    _copy(src, dst) {
+    const normalized =
+      sample.luminance / 255;
 
-      const gl = this.gl;
+    const scaled =
+      normalized * (stops.length - 1);
 
-      gl.viewport(
-        0,
-        0,
-        dst.width,
-        dst.height
-      );
+    const index = Math.min(
+      stops.length - 2,
+      Math.floor(scaled)
+    );
 
-      this.copy.bind();
+    const amount =
+      scaled - index;
 
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
+    const a = stops[index];
+    const b = stops[index + 1];
 
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        src.texture
-      );
-
-      this.copy.set1i(
-        "uTexture",
-        0
-      );
-
-      this._blit(dst.fbo);
-    }
-
-
-    setSourceImage(el) {
-
-      const gl = this.gl;
-
-      this._sourceImageEl =
-        el;
-
-      const texture =
-        gl.createTexture();
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        texture
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_MIN_FILTER,
-        gl.LINEAR
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_MAG_FILTER,
-        gl.LINEAR
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_WRAP_S,
-        gl.CLAMP_TO_EDGE
-      );
-
-      gl.texParameteri(
-        gl.TEXTURE_2D,
-        gl.TEXTURE_WRAP_T,
-        gl.CLAMP_TO_EDGE
-      );
-
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        el
-      );
-
-      gl.viewport(
-        0,
-        0,
-        this.sourceFBO.width,
-        this.sourceFBO.height
-      );
-
-      this.copy.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        texture
-      );
-
-      this.copy.set1i(
-        "uTexture",
-        0
-      );
-
-      this._blit(
-        this.sourceFBO.fbo
-      );
-
-      gl.deleteTexture(
-        texture
-      );
-
-      this._copy(
-        this.sourceFBO,
-        this.dye.read
-      );
-
-      this._copy(
-        this.sourceFBO,
-        this.dye.write
-      );
-    }
+    return `rgb(
+      ${Math.round(
+        lerp(a[0], b[0], amount)
+      )},
+      ${Math.round(
+        lerp(a[1], b[1], amount)
+      )},
+      ${Math.round(
+        lerp(a[2], b[2], amount)
+      )}
+    )`;
+  }
 
 
-    splat(
+  // ============================================================
+  // PARTICLE CLASS
+  // ============================================================
+
+  class Particle {
+    constructor(
       x,
       y,
-      dx,
-      dy
+      color,
+      alpha
     ) {
+      this.homeX = x;
+      this.homeY = y;
 
-      const gl = this.gl;
+      this.x = x;
+      this.y = y;
 
-      /* velocity */
+      this.velocityX =
+        random(-0.2, 0.2);
 
-      gl.viewport(
-        0,
-        0,
-        this.velocity.width,
-        this.velocity.height
-      );
+      this.velocityY =
+        random(-0.2, 0.2);
 
-      this.splatProgram.bind();
+      this.color = color;
+      this.alpha = alpha;
 
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.splatProgram.set1i(
-        "uTarget",
-        0
-      );
-
-      this.splatProgram.set1f(
-        "aspectRatio",
-        this.aspect
-      );
-
-      this.splatProgram.set2f(
-        "point",
-        x,
-        1 - y
-      );
-
-      this.splatProgram.set3f(
-        "color",
-        dx * 0.9,
-        -dy * 0.9,
-        0
-      );
-
-      this.splatProgram.set1f(
-        "radius",
-        this.params.splatRadius
-      );
-
-      this._blit(
-        this.velocity.write.fbo
-      );
-
-      this.velocity.swap();
-
-
-      /* dye */
-
-      gl.viewport(
-        0,
-        0,
-        this.dye.width,
-        this.dye.height
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.dye.read.texture
-      );
-
-      this.splatProgram.set1i(
-        "uTarget",
-        0
-      );
-
-      const energy =
-        Math.min(
-          1,
-          Math.hypot(dx, dy) * 7
+      this.size =
+        random(
+          0.45,
+          CONFIG.particles.size + 1.1
         );
 
-      this.splatProgram.set3f(
-        "color",
-        energy * 0.05,
-        energy * 0.05,
-        energy * 0.05
-      );
-
-      this._blit(
-        this.dye.write.fbo
-      );
-
-      this.dye.swap();
+      this.seed =
+        random(0, 10000);
     }
 
 
-    ambient(strength) {
+    update(delta) {
+      const t =
+        state.time * 0.001;
 
-      this._ambientPhase +=
-        0.006;
+      const normalizedX =
+        this.x /
+        Math.max(1, state.width);
 
-      const a =
-        this._ambientPhase;
+      const normalizedY =
+        this.y /
+        Math.max(1, state.height);
 
+      const angle =
+        Math.sin(
+          normalizedX * 7 +
+          t * 0.72 +
+          this.seed * 0.01
+        ) * 1.6 +
+
+        Math.cos(
+          normalizedY * 9 -
+          t * 0.53 +
+          this.seed * 0.013
+        ) * 1.2 +
+
+        Math.sin(
+          (normalizedX + normalizedY) *
+          12 +
+          t * 0.31
+        ) * 0.75;
+
+
+      const fieldForce =
+        CONFIG.particles.field *
+        (
+          0.45 +
+          (state.turbulence / 100) *
+          1.6
+        );
+
+
+      const viscosity =
+        state.viscosity / 100;
+
+
+      this.velocityX +=
+        Math.cos(angle) *
+        fieldForce *
+        delta *
+        60;
+
+      this.velocityY +=
+        Math.sin(angle) *
+        fieldForce *
+        delta *
+        60;
+
+
+      const homeForce =
+        CONFIG.particles.home +
+        viscosity * 0.0045;
+
+
+      this.velocityX +=
+        (this.homeX - this.x) *
+        homeForce;
+
+      this.velocityY +=
+        (this.homeY - this.y) *
+        homeForce;
+
+
+      // Mouse interaction
+      if (state.mouse.active) {
+        const dx =
+          this.x -
+          state.mouse.x;
+
+        const dy =
+          this.y -
+          state.mouse.y;
+
+        const distance =
+          Math.hypot(dx, dy);
+
+        const radius =
+          CONFIG.particles.mouseRadius;
+
+        if (
+          distance < radius &&
+          distance > 0.001
+        ) {
+          const forceAmount =
+            Math.pow(
+              1 - distance / radius,
+              2
+            );
+
+          const push =
+            CONFIG.particles.mouseForce *
+            (
+              0.35 +
+              (state.turbulence / 100) *
+              2.2
+            );
+
+          this.velocityX +=
+            (dx / distance) *
+            push *
+            forceAmount *
+            delta *
+            60;
+
+          this.velocityY +=
+            (dy / distance) *
+            push *
+            forceAmount *
+            delta *
+            60;
+
+          this.velocityX +=
+            state.mouse.velocityX *
+            0.045 *
+            forceAmount;
+
+          this.velocityY +=
+            state.mouse.velocityY *
+            0.045 *
+            forceAmount;
+        }
+      }
+
+
+      // Damping
+      const damping =
+        0.90 +
+        viscosity * 0.075;
+
+      this.velocityX *= damping;
+      this.velocityY *= damping;
+
+
+      // Move
+      this.x +=
+        this.velocityX *
+        delta *
+        60;
+
+      this.y +=
+        this.velocityY *
+        delta *
+        60;
+
+
+      // Wrap around
+      const margin = 80;
+
+      if (this.x < -margin) {
+        this.x =
+          state.width + margin;
+      }
+
+      if (this.x > state.width + margin) {
+        this.x = -margin;
+      }
+
+      if (this.y < -margin) {
+        this.y =
+          state.height + margin;
+      }
+
+      if (this.y > state.height + margin) {
+        this.y = -margin;
+      }
+    }
+
+
+    draw(context) {
+      context.globalAlpha =
+        this.alpha;
+
+      context.fillStyle =
+        this.color;
+
+      context.fillRect(
+        this.x,
+        this.y,
+        this.size,
+        this.size
+      );
+    }
+  }
+
+
+  // ============================================================
+  // BUILD PARTICLES
+  // ============================================================
+
+  function buildParticles() {
+    const samples =
+      getSourceSamples();
+
+    state.particles = [];
+
+    if (!samples.length) {
+      return;
+    }
+
+    const scaleX =
+      state.width / 700;
+
+    const scaleY =
+      state.height / 500;
+
+    const scale =
+      Math.min(scaleX, scaleY);
+
+    const offsetX =
+      (state.width - 700 * scale) / 2;
+
+    const offsetY =
+      (state.height - 500 * scale) / 2;
+
+
+    for (const sample of samples) {
       const x =
-        0.5 +
-        0.35 *
-        Math.sin(a * 0.9) *
-        Math.cos(a * 0.31);
+        offsetX +
+        sample.x * scale;
 
       const y =
-        0.5 +
-        0.35 *
-        Math.cos(a * 0.7) *
-        Math.sin(a * 0.23);
+        offsetY +
+        sample.y * scale;
 
-      const dx =
-        Math.cos(a * 1.7) *
-        strength;
+      const color =
+        getColor(sample);
 
-      const dy =
-        Math.sin(a * 1.3) *
-        strength;
-
-      this.splat(
-        x,
-        y,
-        dx,
-        dy
-      );
-    }
-
-
-    step(dt) {
-
-      const gl = this.gl;
-
-      dt =
-        Math.min(
-          dt,
-          1 / 30
-        );
-
-      /* CURL */
-
-      gl.viewport(
-        0,
-        0,
-        this.velocity.width,
-        this.velocity.height
-      );
-
-      this.curl.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.curl.set1i(
-        "uVelocity",
-        0
-      );
-
-      this.curl.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      this._blit(
-        this.curlFBO.fbo
-      );
-
-
-      /* VORTICITY */
-
-      this.vorticity.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.vorticity.set1i(
-        "uVelocity",
-        0
-      );
-
-      gl.activeTexture(
-        gl.TEXTURE1
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.curlFBO.texture
-      );
-
-      this.vorticity.set1i(
-        "uCurl",
-        1
-      );
-
-      this.vorticity.set1f(
-        "curl",
-        this.params.curl
-      );
-
-      this.vorticity.set1f(
-        "dt",
-        dt
-      );
-
-      this.vorticity.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      this._blit(
-        this.velocity.write.fbo
-      );
-
-      this.velocity.swap();
-
-
-      /* DIVERGENCE */
-
-      this.divergence.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.divergence.set1i(
-        "uVelocity",
-        0
-      );
-
-      this.divergence.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      this._blit(
-        this.divergenceFBO.fbo
-      );
-
-
-      /* PRESSURE */
-
-      this.clear.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.pressure.read.texture
-      );
-
-      this.clear.set1i(
-        "uTexture",
-        0
-      );
-
-      this.clear.set1f(
-        "value",
-        0.8
-      );
-
-      this._blit(
-        this.pressure.write.fbo
-      );
-
-      this.pressure.swap();
-
-
-      this.pressure.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.divergenceFBO.texture
-      );
-
-      this.pressure.set1i(
-        "uDivergence",
-        0
-      );
-
-      this.pressure.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      for (
-        let i = 0;
-        i <
-        this.params.pressureIterations;
-        i++
-      ) {
-
-        gl.activeTexture(
-          gl.TEXTURE1
-        );
-
-        gl.bindTexture(
-          gl.TEXTURE_2D,
-          this.pressure.read.texture
-        );
-
-        this.pressure.set1i(
-          "uPressure",
+      const alpha =
+        clamp(
+          sample.luminance / 220,
+          0.25,
           1
         );
 
-        this._blit(
-          this.pressure.write.fbo
-        );
-
-        this.pressure.swap();
-      }
-
-
-      /* GRADIENT */
-
-      this.gradient.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.pressure.read.texture
-      );
-
-      this.gradient.set1i(
-        "uPressure",
-        0
-      );
-
-      gl.activeTexture(
-        gl.TEXTURE1
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.gradient.set1i(
-        "uVelocity",
-        1
-      );
-
-      this.gradient.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      this._blit(
-        this.velocity.write.fbo
-      );
-
-      this.velocity.swap();
-
-
-      /* ADVECT VELOCITY */
-
-      this.advection.bind();
-
-      gl.viewport(
-        0,
-        0,
-        this.velocity.width,
-        this.velocity.height
-      );
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.advection.set1i(
-        "uVelocity",
-        0
-      );
-
-      gl.activeTexture(
-        gl.TEXTURE1
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.advection.set1i(
-        "uSource",
-        1
-      );
-
-      this.advection.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      this.advection.set1f(
-        "dt",
-        dt
-      );
-
-      this.advection.set1f(
-        "dissipation",
-        this.params.velocityDissipation
-      );
-
-      this._blit(
-        this.velocity.write.fbo
-      );
-
-      this.velocity.swap();
-
-
-      /* ADVECT DYE */
-
-      gl.viewport(
-        0,
-        0,
-        this.dye.width,
-        this.dye.height
-      );
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.velocity.read.texture
-      );
-
-      this.advection.set1i(
-        "uVelocity",
-        0
-      );
-
-      gl.activeTexture(
-        gl.TEXTURE1
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.dye.read.texture
-      );
-
-      this.advection.set1i(
-        "uSource",
-        1
-      );
-
-      this.advection.set2f(
-        "texelSize",
-        this.velocity.texelSizeX,
-        this.velocity.texelSizeY
-      );
-
-      this.advection.set1f(
-        "dissipation",
-        this.params.dyeDissipation
-      );
-
-      this._blit(
-        this.dye.write.fbo
-      );
-
-      this.dye.swap();
-    }
-
-
-    render(
-      palette = 1
-    ) {
-
-      const gl = this.gl;
-
-      gl.bindFramebuffer(
-        gl.FRAMEBUFFER,
-        null
-      );
-
-      gl.viewport(
-        0,
-        0,
-        this.canvas.width,
-        this.canvas.height
-      );
-
-      this.display.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.dye.read.texture
-      );
-
-      this.display.set1i(
-        "uTexture",
-        0
-      );
-
-      this.display.set1i(
-        "uPalette",
-        palette
-      );
-
-      this._draw();
-    }
-
-
-    readPixels(
-      width,
-      height
-    ) {
-
-      const gl = this.gl;
-
-      const fbo =
-        this._createFBO(
-          width,
-          height,
-          gl.RGBA8,
-          gl.RGBA,
-          gl.UNSIGNED_BYTE,
-          gl.LINEAR
-        );
-
-      gl.viewport(
-        0,
-        0,
-        width,
-        height
-      );
-
-      this.copy.bind();
-
-      gl.activeTexture(
-        gl.TEXTURE0
-      );
-
-      gl.bindTexture(
-        gl.TEXTURE_2D,
-        this.dye.read.texture
-      );
-
-      this.copy.set1i(
-        "uTexture",
-        0
-      );
-
-      this._blit(
-        fbo.fbo
-      );
-
-      const pixels =
-        new Uint8Array(
-          width *
-          height *
-          4
-        );
-
-      gl.readPixels(
-        0,
-        0,
-        width,
-        height,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        pixels
-      );
-
-      return {
-        pixels,
-        width,
-        height
-      };
-    }
-  }
-
-
-  /* =======================================================
-     ASCII ENGINE
-  ======================================================= */
-
-  class ASCIIEffect {
-
-    constructor(canvas) {
-
-      this.canvas = canvas;
-
-      this.ctx =
-        canvas.getContext(
-          "2d"
-        );
-
-      this.source = null;
-    }
-
-
-    setSource(source) {
-
-      this.source =
-        source;
-    }
-
-
-    render(cellSize) {
-
-      if (!this.source)
-        return;
-
-      const canvas =
-        this.canvas;
-
-      const ctx =
-        this.ctx;
-
-      const w =
-        canvas.width;
-
-      const h =
-        canvas.height;
-
-      ctx.clearRect(
-        0,
-        0,
-        w,
-        h
-      );
-
-      const cols =
-        Math.max(
-          20,
-          Math.floor(
-            w / cellSize
-          )
-        );
-
-      const rows =
-        Math.max(
-          10,
-          Math.floor(
-            h /
-            (cellSize * 2)
-          )
-        );
-
-      const off =
-        document.createElement(
-          "canvas"
-        );
-
-      off.width =
-        cols;
-
-      off.height =
-        rows;
-
-      const octx =
-        off.getContext(
-          "2d"
-        );
-
-      octx.drawImage(
-        this.source,
-        0,
-        0,
-        cols,
-        rows
-      );
-
-      const data =
-        octx.getImageData(
-          0,
-          0,
-          cols,
-          rows
-        ).data;
-
-      const chars =
-        MELT_CONFIG.ascii.characters;
-
-      const fontSize =
-        cellSize;
-
-      ctx.font =
-        `${fontSize}px IBM Plex Mono, monospace`;
-
-      ctx.textBaseline =
-        "top";
-
-      ctx.fillStyle =
-        "#7dffab";
-
-      for (
-        let y = 0;
-        y < rows;
-        y++
-      ) {
-
-        for (
-          let x = 0;
-          x < cols;
-          x++
-        ) {
-
-          const i =
-            (y * cols + x) * 4;
-
-          const r =
-            data[i];
-
-          const g =
-            data[i + 1];
-
-          const b =
-            data[i + 2];
-
-          const lum =
-            (
-              r * 0.299 +
-              g * 0.587 +
-              b * 0.114
-            ) / 255;
-
-          const index =
-            Math.floor(
-              lum *
-              (chars.length - 1)
-            );
-
-          const char =
-            chars[index];
-
-          if (char === " ")
-            continue;
-
-          ctx.fillText(
-            char,
-            x * cellSize,
-            y * cellSize * 2
-          );
-        }
-      }
-    }
-  }
-
-
-  /* =======================================================
-     SOURCE CREATION
-  ======================================================= */
-
-  function createTextSource(
-    text
-  ) {
-
-    const canvas =
-      document.createElement(
-        "canvas"
-      );
-
-    canvas.width =
-      1200;
-
-    canvas.height =
-      700;
-
-    const ctx =
-      canvas.getContext(
-        "2d"
-      );
-
-    ctx.fillStyle =
-      "#050706";
-
-    ctx.fillRect(
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
-    ctx.fillStyle =
-      "#d7e4da";
-
-    ctx.font =
-      "600 150px Fraunces, Georgia, serif";
-
-    ctx.textAlign =
-      "center";
-
-    ctx.textBaseline =
-      "middle";
-
-    ctx.fillText(
-      text || "MELT",
-      canvas.width / 2,
-      canvas.height / 2
-    );
-
-    return canvas;
-  }
-
-
-  /* =======================================================
-     APPLICATION
-  ======================================================= */
-
-  function boot() {
-
-    const canvas =
-      document.getElementById(
-        "glcanvas"
-      );
-
-    const asciiCanvas =
-      document.getElementById(
-        "asciicanvas"
-      );
-
-    const loading =
-      document.getElementById(
-        "loading"
-      );
-
-    if (!canvas) {
-      console.error(
-        "MELT: canvas missing."
-      );
-      return;
-    }
-
-    let sim;
-
-    try {
-
-      sim =
-        new FluidSim(
-          canvas
-        );
-
-    } catch (error) {
-
-      console.error(
-        "MELT initialization failed:",
-        error
-      );
-
-      loading.innerHTML =
-        "<span>WEBGL INITIALIZATION FAILED</span>";
-
-      return;
-    }
-
-
-    if (!sim.supported) {
-
-      loading.innerHTML =
-        "<span>WEBGL2 FLOAT BUFFER NOT SUPPORTED</span>";
-
-      return;
-    }
-
-
-    const ascii =
-      new ASCIIEffect(
-        asciiCanvas
-      );
-
-
-    /* -----------------------------------------------------
-       STATE
-    ----------------------------------------------------- */
-
-    let mode =
-      "fluid";
-
-    let palette =
-      "matrix";
-
-    let source =
-      createTextSource(
-        "MELT"
-      );
-
-    let pointerActive =
-      false;
-
-    let lastX = 0;
-    let lastY = 0;
-
-    let lastTime =
-      performance.now();
-
-
-    /* -----------------------------------------------------
-       RESIZE
-    ----------------------------------------------------- */
-
-    function resize() {
-
-      sim.resize();
-
-      const dpr =
-        Math.min(
-          window.devicePixelRatio || 1,
-          2
-        );
-
-      asciiCanvas.width =
-        Math.max(
-          1,
-          Math.round(
-            asciiCanvas.clientWidth *
-            dpr
-          )
-        );
-
-      asciiCanvas.height =
-        Math.max(
-          1,
-          Math.round(
-            asciiCanvas.clientHeight *
-            dpr
-          )
-        );
-    }
-
-    window.addEventListener(
-      "resize",
-      resize
-    );
-
-    resize();
-
-
-    /* -----------------------------------------------------
-       INITIAL SOURCE
-    ----------------------------------------------------- */
-
-    sim.setSourceImage(
-      source
-    );
-
-    ascii.setSource(
-      source
-    );
-
-
-    /* -----------------------------------------------------
-       MOUSE
-    ----------------------------------------------------- */
-
-    function pointerMove(
-      event
-    ) {
-
-      const rect =
-        canvas.getBoundingClientRect();
-
-      const x =
-        (
-          event.clientX -
-          rect.left
-        ) /
-        rect.width;
-
-      const y =
-        (
-          event.clientY -
-          rect.top
-        ) /
-        rect.height;
-
-      if (pointerActive) {
-
-        const dx =
-          x - lastX;
-
-        const dy =
-          y - lastY;
-
-        sim.splat(
+      state.particles.push(
+        new Particle(
           x,
           y,
-          dx,
-          dy
-        );
-      }
+          color,
+          alpha
+        )
+      );
+    }
+  }
 
-      lastX = x;
-      lastY = y;
+
+  // ============================================================
+  // AMBIENT PARTICLES
+  // ============================================================
+
+  function buildAmbientParticles() {
+    state.ambient = [];
+
+    for (
+      let i = 0;
+      i < CONFIG.particles.ambient;
+      i++
+    ) {
+      state.ambient.push({
+        x: random(0, state.width),
+        y: random(0, state.height),
+
+        size: random(0.2, 0.8),
+
+        alpha: random(0.03, 0.16),
+
+        speed: random(0.05, 0.4),
+
+        seed: random(0, 10000)
+      });
+    }
+  }
+
+
+  // ============================================================
+  // UPDATE PARTICLES
+  // ============================================================
+
+  function update(delta) {
+    for (const particle of state.particles) {
+      particle.update(delta);
     }
 
 
-    canvas.addEventListener(
-      "pointerdown",
-      event => {
+    for (const particle of state.ambient) {
+      particle.y -=
+        particle.speed *
+        delta *
+        60;
 
-        pointerActive =
-          true;
+      particle.x +=
+        Math.sin(
+          state.time * 0.0005 +
+          particle.seed
+        ) *
+        0.08;
 
-        canvas.setPointerCapture(
-          event.pointerId
-        );
+      if (particle.y < -5) {
+        particle.y =
+          state.height + 5;
 
-        pointerMove(
-          event
-        );
+        particle.x =
+          random(0, state.width);
       }
+    }
+
+
+    state.mouse.velocityX *= 0.82;
+    state.mouse.velocityY *= 0.82;
+  }
+
+
+  // ============================================================
+  // FLUID RENDERER
+  // ============================================================
+
+  function renderFluid() {
+    fluid.globalCompositeOperation =
+      "source-over";
+
+    fluid.fillStyle =
+      "rgba(2, 3, 2, 0.18)";
+
+    fluid.fillRect(
+      0,
+      0,
+      state.width,
+      state.height
     );
 
 
-    canvas.addEventListener(
-      "pointermove",
-      pointerMove
+    // Ambient field
+    for (const particle of state.ambient) {
+      fluid.globalAlpha =
+        particle.alpha;
+
+      fluid.fillStyle =
+        "rgba(125,255,171,1)";
+
+      fluid.fillRect(
+        particle.x,
+        particle.y,
+        particle.size,
+        particle.size
+      );
+    }
+
+
+    // Main matter
+    fluid.globalCompositeOperation =
+      "lighter";
+
+
+    for (const particle of state.particles) {
+      particle.draw(fluid);
+    }
+
+
+    fluid.globalCompositeOperation =
+      "source-over";
+
+    fluid.globalAlpha = 1;
+  }
+
+
+  // ============================================================
+  // ASCII RENDERER
+  // ============================================================
+
+  function renderASCII() {
+    ascii.clearRect(
+      0,
+      0,
+      state.width,
+      state.height
     );
 
 
-    canvas.addEventListener(
-      "pointerup",
-      event => {
+    const cellSize =
+      clamp(
+        Math.round(
+          CONFIG.ascii.maxCell -
+          (state.density / 100) *
+          (
+            CONFIG.ascii.maxCell -
+            CONFIG.ascii.minCell
+          )
+        ),
+        CONFIG.ascii.minCell,
+        CONFIG.ascii.maxCell
+      );
 
-        pointerActive =
-          false;
 
-        try {
+    const cols =
+      Math.ceil(
+        state.width /
+        cellSize
+      );
 
-          canvas.releasePointerCapture(
-            event.pointerId
+    const rows =
+      Math.ceil(
+        state.height /
+        cellSize
+      );
+
+
+    ascii.font =
+      `${cellSize}px "Space Mono", monospace`;
+
+    ascii.textAlign =
+      "center";
+
+    ascii.textBaseline =
+      "middle";
+
+
+    const sourcePixels =
+      source.getImageData(
+        0,
+        0,
+        700,
+        500
+      ).data;
+
+
+    const scaleX =
+      700 /
+      Math.max(1, state.width);
+
+    const scaleY =
+      500 /
+      Math.max(1, state.height);
+
+
+    const chars =
+      CONFIG.ascii.chars;
+
+
+    for (
+      let row = 0;
+      row < rows;
+      row++
+    ) {
+      for (
+        let col = 0;
+        col < cols;
+        col++
+      ) {
+        let x =
+          col * cellSize +
+          cellSize / 2;
+
+        let y =
+          row * cellSize +
+          cellSize / 2;
+
+
+        const wave =
+          Math.sin(
+            x * 0.018 +
+            state.time * 0.0012
+          ) *
+          CONFIG.ascii.distortion *
+          0.15;
+
+
+        const wave2 =
+          Math.cos(
+            y * 0.022 -
+            state.time * 0.001
+          ) *
+          CONFIG.ascii.distortion *
+          0.15;
+
+
+        const sourceX =
+          clamp(
+            Math.floor(
+              (x + wave) *
+              scaleX
+            ),
+            0,
+            699
           );
 
-        } catch {}
-      }
-    );
+
+        const sourceY =
+          clamp(
+            Math.floor(
+              (y + wave2) *
+              scaleY
+            ),
+            0,
+            499
+          );
 
 
-    canvas.addEventListener(
-      "pointerleave",
-      () => {
-
-        pointerActive =
-          false;
-      }
-    );
+        const index =
+          (sourceY * 700 +
+          sourceX) * 4;
 
 
-    /* -----------------------------------------------------
-       IMAGE UPLOAD
-    ----------------------------------------------------- */
+        const r =
+          sourcePixels[index];
 
-    const fileInput =
-      document.getElementById(
-        "file-input"
-      );
+        const g =
+          sourcePixels[index + 1];
 
-    const dropzone =
-      document.getElementById(
-        "dropzone"
-      );
+        const b =
+          sourcePixels[index + 2];
 
 
-    function loadImage(
-      file
-    ) {
+        const brightness =
+          (r + g + b) / 3;
 
-      if (!file ||
-          !file.type.startsWith(
-            "image/"
-          )) {
 
-        return;
-      }
+        if (brightness < 18) {
+          continue;
+        }
 
-      const url =
-        URL.createObjectURL(
-          file
+
+        const charIndex =
+          clamp(
+            Math.floor(
+              (brightness / 255) *
+              (chars.length - 1)
+            ),
+            0,
+            chars.length - 1
+          );
+
+
+        const character =
+          chars[charIndex];
+
+
+        let color;
+
+
+        if (state.palette === "matrix") {
+          color =
+            `rgba(
+              125,
+              255,
+              171,
+              ${clamp(
+                brightness / 255,
+                0.12,
+                0.95
+              )}
+            )`;
+        }
+
+        else if (state.palette === "amber") {
+          color =
+            `rgba(
+              255,
+              181,
+              47,
+              ${clamp(
+                brightness / 255,
+                0.12,
+                0.95
+              )}
+            )`;
+        }
+
+        else if (state.palette === "mono") {
+          color =
+            `rgba(
+              235,
+              235,
+              230,
+              ${clamp(
+                brightness / 255,
+                0.12,
+                0.95
+              )}
+            )`;
+        }
+
+        else {
+          color =
+            `rgba(
+              ${r},
+              ${g},
+              ${b},
+              ${clamp(
+                brightness / 255,
+                0.12,
+                0.95
+              )}
+            )`;
+        }
+
+
+        ascii.fillStyle =
+          color;
+
+        ascii.fillText(
+          character,
+          x,
+          y
         );
+      }
+    }
+  }
 
-      const img =
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+
+  function render() {
+    if (
+      state.mode === "fluid" ||
+      state.mode === "both"
+    ) {
+      renderFluid();
+      fluidCanvas.style.opacity = "1";
+    } else {
+      fluidCanvas.style.opacity = "0";
+    }
+
+
+    if (
+      state.mode === "ascii" ||
+      state.mode === "both"
+    ) {
+      renderASCII();
+      asciiCanvas.style.opacity = "1";
+    } else {
+      asciiCanvas.style.opacity = "0";
+    }
+  }
+
+
+  // ============================================================
+  // ANIMATION LOOP
+  // ============================================================
+
+  function animationFrame(now) {
+    const delta =
+      clamp(
+        (now - state.lastTime) / 1000,
+        0.001,
+        0.033
+      );
+
+    state.lastTime = now;
+    state.time = now;
+
+
+    update(delta);
+    render();
+
+
+    state.frameCount++;
+
+
+    if (
+      now - state.fpsClock >
+      500
+    ) {
+      const seconds =
+        (now - state.fpsClock) /
+        1000;
+
+      if (fpsCounter) {
+        fpsCounter.textContent =
+          `${Math.round(
+            state.frameCount /
+            seconds
+          )} FPS`;
+      }
+
+      state.frameCount = 0;
+      state.fpsClock = now;
+    }
+
+
+    requestAnimationFrame(
+      animationFrame
+    );
+  }
+
+
+  // ============================================================
+  // POINTER / MOUSE
+  // ============================================================
+
+  function updatePointer(
+    clientX,
+    clientY
+  ) {
+    const rect =
+      fluidCanvas.getBoundingClientRect();
+
+    const x =
+      clientX - rect.left;
+
+    const y =
+      clientY - rect.top;
+
+
+    state.mouse.velocityX =
+      x - state.mouse.previousX;
+
+    state.mouse.velocityY =
+      y - state.mouse.previousY;
+
+
+    state.mouse.previousX = x;
+    state.mouse.previousY = y;
+
+
+    state.mouse.x = x;
+    state.mouse.y = y;
+
+
+    state.mouse.active = true;
+
+
+    if (pointerX) {
+      pointerX.textContent =
+        String(
+          Math.round(x)
+        ).padStart(4, "0");
+    }
+
+
+    if (pointerY) {
+      pointerY.textContent =
+        String(
+          Math.round(y)
+        ).padStart(4, "0");
+    }
+
+
+    if (pointerHint) {
+      pointerHint.classList.add(
+        "hidden"
+      );
+    }
+  }
+
+
+  fluidCanvas.addEventListener(
+    "pointermove",
+    (event) => {
+      updatePointer(
+        event.clientX,
+        event.clientY
+      );
+    }
+  );
+
+
+  fluidCanvas.addEventListener(
+    "pointerleave",
+    () => {
+      state.mouse.active = false;
+    }
+  );
+
+
+  // ============================================================
+  // IMAGE INPUT
+  // ============================================================
+
+  function loadImageFile(file) {
+    if (!file) {
+      return;
+    }
+
+
+    if (
+      !file.type.startsWith("image/")
+    ) {
+      setStatus(
+        "INVALID IMAGE",
+        false
+      );
+
+      return;
+    }
+
+
+    const reader =
+      new FileReader();
+
+
+    reader.onload = () => {
+      const image =
         new Image();
 
-      img.onload = () => {
 
-        source =
-          img;
+      image.onload = () => {
+        createImageSource(image);
 
-        sim.setSourceImage(
-          img
-        );
+        if (imageName) {
+          imageName.textContent =
+            file.name;
+        }
 
-        ascii.setSource(
-          img
-        );
+        if (imageMeta) {
+          imageMeta.hidden = false;
+        }
 
-        URL.revokeObjectURL(
-          url
+        setStatus(
+          "IMAGE LOADED"
         );
       };
 
-      img.src =
-        url;
-    }
+
+      image.onerror = () => {
+        setStatus(
+          "IMAGE FAILED",
+          false
+        );
+      };
 
 
+      image.src =
+        reader.result;
+    };
+
+
+    reader.onerror = () => {
+      setStatus(
+        "FILE READ FAILED",
+        false
+      );
+    };
+
+
+    reader.readAsDataURL(file);
+  }
+
+
+  if (fileInput) {
     fileInput.addEventListener(
       "change",
-      event => {
-
-        const file =
-          event.target.files[0];
-
-        loadImage(
-          file
+      (event) => {
+        loadImageFile(
+          event.target.files[0]
         );
       }
     );
+  }
 
 
-    /* drag/drop */
-
+  if (dropzone) {
     dropzone.addEventListener(
       "dragover",
-      event => {
-
+      (event) => {
         event.preventDefault();
 
         dropzone.classList.add(
-          "is-drag"
+          "drag"
         );
       }
     );
@@ -2584,9 +1410,8 @@
     dropzone.addEventListener(
       "dragleave",
       () => {
-
         dropzone.classList.remove(
-          "is-drag"
+          "drag"
         );
       }
     );
@@ -2594,437 +1419,770 @@
 
     dropzone.addEventListener(
       "drop",
-      event => {
-
+      (event) => {
         event.preventDefault();
 
         dropzone.classList.remove(
-          "is-drag"
+          "drag"
         );
 
-        loadImage(
+        loadImageFile(
           event.dataTransfer.files[0]
         );
       }
     );
+  }
 
 
-    /* -----------------------------------------------------
-       TEXT
-    ----------------------------------------------------- */
+  if (imageClear) {
+    imageClear.addEventListener(
+      "click",
+      () => {
+        if (fileInput) {
+          fileInput.value = "";
+        }
 
-    const textInput =
-      document.getElementById(
-        "text-input"
-      );
+        if (imageMeta) {
+          imageMeta.hidden = true;
+        }
 
-    const textApply =
-      document.getElementById(
-        "text-apply"
-      );
+        createTextSource("MELT");
 
-
-    function applyText() {
-
-      const text =
-        textInput.value.trim();
-
-      if (!text)
-        return;
-
-      source =
-        createTextSource(
-          text
+        setStatus(
+          "GENERATED SOURCE"
         );
+      }
+    );
+  }
 
-      sim.setSourceImage(
-        source
+
+  // ============================================================
+  // TEXT INPUT
+  // ============================================================
+
+  if (textInput) {
+    textInput.addEventListener(
+      "input",
+      () => {
+        if (textCount) {
+          textCount.textContent =
+            `${textInput.value.length} / 120`;
+        }
+      }
+    );
+  }
+
+
+  function injectText() {
+    createTextSource(
+      textInput
+        ? textInput.value
+        : "MELT"
+    );
+
+    setStatus(
+      "TEXT INJECTED"
+    );
+  }
+
+
+  if (textApply) {
+    textApply.addEventListener(
+      "click",
+      injectText
+    );
+  }
+
+
+  if (textInput) {
+    textInput.addEventListener(
+      "keydown",
+      (event) => {
+        if (
+          (event.ctrlKey ||
+            event.metaKey) &&
+          event.key === "Enter"
+        ) {
+          injectText();
+        }
+      }
+    );
+  }
+
+
+  // ============================================================
+  // SOURCE TABS
+  // ============================================================
+
+  document
+    .querySelectorAll(".source-tab")
+    .forEach((tab) => {
+
+      tab.addEventListener(
+        "click",
+        () => {
+
+          const imageMode =
+            tab.id === "tab-image";
+
+
+          document
+            .querySelectorAll(".source-tab")
+            .forEach((item) => {
+
+              item.classList.toggle(
+                "active",
+                item === tab
+              );
+
+            });
+
+
+          const inputImage =
+            $("input-image");
+
+          const inputText =
+            $("input-text");
+
+
+          if (inputImage) {
+            inputImage.hidden =
+              !imageMode;
+          }
+
+
+          if (inputText) {
+            inputText.hidden =
+              imageMode;
+          }
+        }
       );
 
-      ascii.setSource(
-        source
+    });
+
+
+  // ============================================================
+  // RENDER MODES
+  // ============================================================
+
+  document
+    .querySelectorAll(".mode")
+    .forEach((button) => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          state.mode =
+            button.dataset.mode;
+
+
+          document
+            .querySelectorAll(".mode")
+            .forEach((item) => {
+
+              item.classList.toggle(
+                "active",
+                item === button
+              );
+
+            });
+
+
+          if (state.mode === "ascii") {
+
+            if (densityLabel) {
+              densityLabel.firstChild.textContent =
+                "CELL SIZE ";
+            }
+
+            if (densityHint) {
+              densityHint.textContent =
+                "smaller = more characters";
+            }
+
+          } else {
+
+            if (densityLabel) {
+              densityLabel.firstChild.textContent =
+                "GRAIN ";
+            }
+
+            if (densityHint) {
+              densityHint.textContent =
+                "controls particle density";
+            }
+
+          }
+
+
+          setStatus(
+            `${state.mode.toUpperCase()} FIELD`
+          );
+        }
       );
+
+    });
+
+
+  // ============================================================
+  // SLIDERS
+  // ============================================================
+
+  function syncControls() {
+    if (turbulence) {
+      state.turbulence =
+        Number(turbulence.value);
+    }
+
+    if (viscosity) {
+      state.viscosity =
+        Number(viscosity.value);
+    }
+
+    if (density) {
+      state.density =
+        Number(density.value);
     }
 
 
-    textApply.addEventListener(
-      "click",
-      applyText
-    );
+    if (turbulenceValue) {
+      turbulenceValue.textContent =
+        state.turbulence;
+    }
+
+    if (viscosityValue) {
+      viscosityValue.textContent =
+        state.viscosity;
+    }
+
+    if (densityValue) {
+      densityValue.textContent =
+        state.density;
+    }
 
 
-    /* -----------------------------------------------------
-       INPUT TABS
-    ----------------------------------------------------- */
-
-    const tabImage =
-      document.getElementById(
-        "tab-image"
-      );
-
-    const tabText =
-      document.getElementById(
-        "tab-text"
-      );
-
-    const inputImage =
-      document.getElementById(
-        "input-image"
-      );
-
-    const inputText =
-      document.getElementById(
-        "input-text"
-      );
+    state.dirty = true;
+  }
 
 
-    tabImage.addEventListener(
-      "click",
-      () => {
-
-        tabImage.setAttribute(
-          "aria-selected",
-          "true"
-        );
-
-        tabText.setAttribute(
-          "aria-selected",
-          "false"
-        );
-
-        inputImage.hidden =
-          false;
-
-        inputText.hidden =
-          true;
-      }
-    );
-
-
-    tabText.addEventListener(
-      "click",
-      () => {
-
-        tabImage.setAttribute(
-          "aria-selected",
-          "false"
-        );
-
-        tabText.setAttribute(
-          "aria-selected",
-          "true"
-        );
-
-        inputImage.hidden =
-          true;
-
-        inputText.hidden =
-          false;
-      }
-    );
-
-
-    /* -----------------------------------------------------
-       EFFECT MODE
-    ----------------------------------------------------- */
-
-    document
-      .querySelectorAll(
-        ".seg-btn"
-      )
-      .forEach(
-        button => {
-
-          button.addEventListener(
-            "click",
-            () => {
-
-              document
-                .querySelectorAll(
-                  ".seg-btn"
-                )
-                .forEach(
-                  b =>
-                    b.classList.remove(
-                      "is-active"
-                    )
-                );
-
-              button.classList.add(
-                "is-active"
-              );
-
-              mode =
-                button.dataset.mode;
-
-              asciiCanvas.style.display =
-                mode === "ascii" ||
-                mode === "both"
-                  ? "block"
-                  : "none";
-            }
-          );
-        }
-      );
-
-
-    /* -----------------------------------------------------
-       PALETTE
-    ----------------------------------------------------- */
-
-    const paletteMap = {
-
-      source: 0,
-      matrix: 1,
-      monochrome: 2,
-      amber: 3
-
-    };
-
-
-    document
-      .querySelectorAll(
-        ".swatch"
-      )
-      .forEach(
-        button => {
-
-          button.addEventListener(
-            "click",
-            () => {
-
-              document
-                .querySelectorAll(
-                  ".swatch"
-                )
-                .forEach(
-                  b =>
-                    b.classList.remove(
-                      "is-active"
-                    )
-                );
-
-              button.classList.add(
-                "is-active"
-              );
-
-              palette =
-                button.dataset.palette;
-            }
-          );
-        }
-      );
-
-
-    /* -----------------------------------------------------
-       SLIDERS
-    ----------------------------------------------------- */
-
-    const turbulence =
-      document.getElementById(
-        "s-turbulence"
-      );
-
-    const viscosity =
-      document.getElementById(
-        "s-viscosity"
-      );
-
-    const density =
-      document.getElementById(
-        "s-density"
-      );
-
-
+  if (turbulence) {
     turbulence.addEventListener(
       "input",
-      () => {
-
-        sim.params.curl =
-          Number(
-            turbulence.value
-          ) * 0.5;
-      }
+      syncControls
     );
+  }
 
 
+  if (viscosity) {
     viscosity.addEventListener(
       "input",
-      () => {
+      syncControls
+    );
+  }
 
-        sim.params.dyeDissipation =
-          Number(
-            viscosity.value
-          ) / 100;
+
+  if (density) {
+    density.addEventListener(
+      "input",
+      () => {
+        syncControls();
+
+        buildParticles();
       }
     );
+  }
 
 
-    /* -----------------------------------------------------
-       RESET
-    ----------------------------------------------------- */
+  // ============================================================
+  // PALETTES
+  // ============================================================
 
-    document
-      .getElementById(
-        "btn-reset"
-      )
-      .addEventListener(
+  document
+    .querySelectorAll(".palette")
+    .forEach((button) => {
+
+      button.addEventListener(
         "click",
         () => {
 
-          sim.setSourceImage(
-            source
+          state.palette =
+            button.dataset.palette;
+
+
+          document
+            .querySelectorAll(".palette")
+            .forEach((item) => {
+
+              item.classList.toggle(
+                "active",
+                item === button
+              );
+
+            });
+
+
+          buildParticles();
+
+          state.dirty = true;
+
+
+          setStatus(
+            `${state.palette.toUpperCase()} PALETTE`
           );
         }
       );
 
+    });
 
-    /* -----------------------------------------------------
-       SAVE
-    ----------------------------------------------------- */
+
+  // ============================================================
+  // RESET
+  // ============================================================
+
+  function reset() {
+
+    if (turbulence) {
+      turbulence.value = 45;
+    }
+
+    if (viscosity) {
+      viscosity.value = 20;
+    }
+
+    if (density) {
+      density.value = 55;
+    }
+
+
+    state.mode = "fluid";
+    state.palette = "source";
+
 
     document
-      .getElementById(
-        "btn-save"
-      )
-      .addEventListener(
-        "click",
-        () => {
+      .querySelectorAll(".mode")
+      .forEach((button) => {
 
-          const link =
-            document.createElement(
-              "a"
-            );
+        button.classList.toggle(
+          "active",
+          button.dataset.mode === "fluid"
+        );
 
-          link.download =
-            "melt-frame.png";
+      });
 
-          link.href =
-            canvas.toDataURL(
-              "image/png"
-            );
 
-          link.click();
+    document
+      .querySelectorAll(".palette")
+      .forEach((button) => {
+
+        button.classList.toggle(
+          "active",
+          button.dataset.palette === "source"
+        );
+
+      });
+
+
+    if (textInput) {
+      textInput.value = "";
+    }
+
+
+    if (textCount) {
+      textCount.textContent =
+        "0 / 120";
+    }
+
+
+    if (fileInput) {
+      fileInput.value = "";
+    }
+
+
+    if (imageMeta) {
+      imageMeta.hidden = true;
+    }
+
+
+    createTextSource("MELT");
+
+    syncControls();
+
+    buildAmbientParticles();
+    buildParticles();
+
+
+    fluid.clearRect(
+      0,
+      0,
+      state.width,
+      state.height
+    );
+
+
+    ascii.clearRect(
+      0,
+      0,
+      state.width,
+      state.height
+    );
+
+
+    setStatus(
+      "FIELD RESET"
+    );
+  }
+
+
+  if (resetButton) {
+    resetButton.addEventListener(
+      "click",
+      reset
+    );
+  }
+
+
+  if (brandReset) {
+    brandReset.addEventListener(
+      "click",
+      reset
+    );
+  }
+
+
+  // ============================================================
+  // SAVE FRAME
+  // ============================================================
+
+  if (saveButton) {
+    saveButton.addEventListener(
+      "click",
+      () => {
+
+        const output =
+          document.createElement(
+            "canvas"
+          );
+
+
+        output.width =
+          fluidCanvas.width;
+
+        output.height =
+          fluidCanvas.height;
+
+
+        const context =
+          output.getContext("2d");
+
+
+        context.fillStyle =
+          "#020302";
+
+
+        context.fillRect(
+          0,
+          0,
+          output.width,
+          output.height
+        );
+
+
+        if (
+          state.mode !== "ascii"
+        ) {
+          context.drawImage(
+            fluidCanvas,
+            0,
+            0
+          );
         }
+
+
+        if (
+          state.mode !== "fluid"
+        ) {
+          context.drawImage(
+            asciiCanvas,
+            0,
+            0
+          );
+        }
+
+
+        const link =
+          document.createElement("a");
+
+
+        link.download =
+          `melt-${Date.now()}.png`;
+
+
+        link.href =
+          output.toDataURL(
+            "image/png"
+          );
+
+
+        link.click();
+      }
+    );
+  }
+
+
+  // ============================================================
+  // PANEL
+  // ============================================================
+
+  function setPanelOpen(open) {
+
+    if (!panel) {
+      return;
+    }
+
+    panel.classList.toggle(
+      "closed",
+      !open
+    );
+
+
+    if (panelToggle) {
+      panelToggle.setAttribute(
+        "aria-expanded",
+        String(open)
       );
+    }
+  }
 
 
-    /* -----------------------------------------------------
-       LOADING
-    ----------------------------------------------------- */
-
-    loading.hidden =
-      true;
-
-
-    /* -----------------------------------------------------
-       LOOP
-    ----------------------------------------------------- */
-
-    function frame(now) {
-
-      const dt =
-        Math.min(
-          (now - lastTime) /
-            1000,
-          1 / 30
-        );
-
-      lastTime =
-        now;
+  if (panelClose) {
+    panelClose.addEventListener(
+      "click",
+      () => {
+        setPanelOpen(false);
+      }
+    );
+  }
 
 
-      /* automatic movement */
+  if (panelToggle) {
+    panelToggle.addEventListener(
+      "click",
+      () => {
 
-      sim.ambient(
-        MELT_CONFIG.fluid
-          .ambientStrength
-      );
+        const closed =
+          panel.classList.contains(
+            "closed"
+          );
+
+        setPanelOpen(closed);
+      }
+    );
+  }
 
 
-      sim.step(
-        dt
-      );
+  // ============================================================
+  // KEYBOARD
+  // ============================================================
 
+  window.addEventListener(
+    "keydown",
+    (event) => {
 
-      /* fluid */
-
-      if (
-        mode === "fluid" ||
-        mode === "both"
-      ) {
-
-        sim.render(
-          paletteMap[
-            palette
-          ]
-        );
+      if (event.key === "Escape") {
+        setPanelOpen(false);
       }
 
 
-      /* ascii */
+      const activeElement =
+        document.activeElement;
+
+
+      const editing =
+        activeElement &&
+        (
+          activeElement.tagName ===
+            "TEXTAREA" ||
+
+          activeElement.tagName ===
+            "INPUT"
+        );
+
 
       if (
-        mode === "ascii" ||
-        mode === "both"
+        event.key.toLowerCase() === "r" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !editing
       ) {
-
-        const cell =
-          Number(
-            density.value
-          ) / 5;
-
-        ascii.render(
-          Math.max(
-            MELT_CONFIG.ascii.minCell,
-            Math.min(
-              MELT_CONFIG.ascii.maxCell,
-              cell
-            )
-          )
-        );
+        reset();
       }
+
+    }
+  );
+
+
+  // ============================================================
+  // RESIZE
+  // ============================================================
+
+  window.addEventListener(
+    "resize",
+    () => {
+
+      resize();
+
+      buildAmbientParticles();
+      buildParticles();
+
+    }
+  );
+
+
+  // ============================================================
+  // ERROR HANDLING
+  // ============================================================
+
+  function showError(error) {
+
+    console.error(
+      "MELT error:",
+      error
+    );
+
+
+    if (errorScreen) {
+      errorScreen.hidden = false;
+    }
+
+
+    if (errorText) {
+      errorText.textContent =
+        error?.message ||
+        "Renderer initialization failed.";
+    }
+
+
+    if (boot) {
+      boot.classList.add("done");
+    }
+
+
+    setStatus(
+      "FIELD ERROR",
+      false
+    );
+  }
+
+
+  if ($("error-retry")) {
+    $("error-retry").addEventListener(
+      "click",
+      () => {
+
+        if (errorScreen) {
+          errorScreen.hidden = true;
+        }
+
+        start();
+
+      }
+    );
+  }
+
+
+  // ============================================================
+  // STARTUP
+  // ============================================================
+
+  function start() {
+
+    try {
+
+      setBoot(
+        0.10,
+        "CREATING CANVAS..."
+      );
+
+      resize();
+
+
+      setBoot(
+        0.30,
+        "CREATING SOURCE..."
+      );
+
+      createTextSource("MELT");
+
+
+      setBoot(
+        0.50,
+        "CREATING MATTER..."
+      );
+
+      buildAmbientParticles();
+      buildParticles();
+
+
+      setBoot(
+        0.75,
+        "STARTING FIELD..."
+      );
+
+      syncControls();
+
+
+      fluid.fillStyle =
+        "#020302";
+
+      fluid.fillRect(
+        0,
+        0,
+        state.width,
+        state.height
+      );
+
+
+      setBoot(
+        1,
+        "FIELD ONLINE"
+      );
+
+      setStatus(
+        "FIELD ONLINE"
+      );
 
 
       requestAnimationFrame(
-        frame
+        animationFrame
       );
+
+
+      window.setTimeout(
+        () => {
+
+          if (boot) {
+            boot.classList.add(
+              "done"
+            );
+          }
+
+        },
+        300
+      );
+
+    } catch (error) {
+
+      showError(error);
+
     }
-
-
-    requestAnimationFrame(
-      frame
-    );
-
-
-    console.log(
-      "%cMELT",
-      "font-size:24px;font-weight:bold"
-    );
-
-    console.log(
-      "experimental image liquefaction engine online"
-    );
   }
 
 
-  /* =======================================================
-     START
-  ======================================================= */
+  // ============================================================
+  // LAUNCH
+  // ============================================================
 
-  if (
-    document.readyState ===
-    "loading"
-  ) {
-
-    document.addEventListener(
-      "DOMContentLoaded",
-      boot
-    );
-
-  } else {
-
-    boot();
-  }
+  start();
 
 })();
