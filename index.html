@@ -1,173 +1,631 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#030504">
-  <title>MELT — Experimental Matter</title>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+    <title>MELT — Generative Visual Engine</title>
 
-  <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap"
+        rel="stylesheet"
+    >
+
+    <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <main id="app">
-    <canvas id="fluid-canvas"></canvas>
-    <canvas id="ascii-canvas"></canvas>
 
-    <div class="screen-grid"></div>
-    <div class="scanlines"></div>
+<body>
+
+    <!-- =====================================================
+         BACKGROUND
+    ====================================================== -->
+
+    <div class="background-grid"></div>
+    <div class="background-noise"></div>
     <div class="vignette"></div>
 
-    <header class="topbar">
-      <button class="brand" id="brand-reset" type="button" aria-label="Reset MELT">
-        <span>MELT</span>
-        <small>/ 01</small>
-      </button>
+    <!-- =====================================================
+         CANVAS
+    ====================================================== -->
 
-      <div class="status">
-        <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">FIELD ONLINE</span>
-      </div>
+    <main id="stage">
+
+        <canvas id="fluid-canvas"></canvas>
+        <canvas id="ascii-canvas"></canvas>
+
+        <!-- HUD CORNERS -->
+
+        <div class="hud-corner top-left"></div>
+        <div class="hud-corner top-right"></div>
+        <div class="hud-corner bottom-left"></div>
+        <div class="hud-corner bottom-right"></div>
+
+        <!-- CROSSHAIRS -->
+
+        <div class="crosshair crosshair-a"></div>
+        <div class="crosshair crosshair-b"></div>
+        <div class="crosshair crosshair-c"></div>
+        <div class="crosshair crosshair-d"></div>
+
+    </main>
+
+
+    <!-- =====================================================
+         TOP BAR
+    ====================================================== -->
+
+    <header class="topbar">
+
+        <button
+            class="brand"
+            id="brand-reset"
+            type="button"
+        >
+            <span class="brand-main">MELT</span>
+            <span class="brand-slash">/</span>
+            <span class="brand-number">01</span>
+
+            <span class="brand-sub">
+                GENERATIVE VISUAL ENGINE
+            </span>
+        </button>
+
+
+        <div class="system-status">
+
+            <span class="status-light"></span>
+
+            <span id="status-text">
+                FIELD ACTIVE
+            </span>
+
+            <span class="status-divider">|</span>
+
+            <span id="fps-counter">
+                60 FPS
+            </span>
+
+        </div>
+
     </header>
 
-    <section class="hero" aria-hidden="true">
-      <span class="eyebrow">[ 001 ] / DIGITAL MATTER EXPERIMENT</span>
-      <h1>MATTER<br><em>IN MOTION</em></h1>
-      <p>image / object / sentence<br>transformed into something else</p>
-    </section>
 
-    <div class="coordinate-readout">
-      MELT.FIELD &nbsp; X <b id="pointer-x">0000</b>
-      &nbsp; Y <b id="pointer-y">0000</b>
-    </div>
+    <!-- =====================================================
+         LEFT CONTROL PANEL
+    ====================================================== -->
 
-    <div class="interaction-hint" id="pointer-hint">
-      <b>+</b> MOVE ACROSS THE FIELD TO DISTURB THE MATTER
-    </div>
+    <aside
+        class="control-panel"
+        id="control-panel"
+    >
 
-    <aside class="control-panel" id="control-panel">
-      <div class="panel-heading">
-        <div>
-          <span>CONTROL / 01</span>
-          <h2>INPUT</h2>
-        </div>
-        <button id="panel-close" class="icon-button" type="button" aria-label="Close controls">×</button>
-      </div>
+        <div class="panel-head">
 
-      <section class="control-section">
-        <div class="section-label"><b>01</b> SOURCE</div>
+            <span>
+                CONTROL / 01
+            </span>
 
-        <div class="tabs">
-          <button class="source-tab active" id="tab-image" type="button">IMAGE</button>
-          <button class="source-tab" id="tab-text" type="button">TEXT</button>
+            <button
+                id="panel-close"
+                type="button"
+            >
+                ×
+            </button>
+
         </div>
 
-        <div id="input-image">
-          <label class="dropzone" id="dropzone" for="file-input">
-            <span class="drop-number">01</span>
-            <strong>DROP IMAGE</strong>
-            <small>or click to select</small>
-            <em>↳</em>
-            <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-          </label>
 
-          <div class="file-meta" id="image-meta" hidden>
-            <span id="image-name">no file</span>
-            <button id="image-clear" type="button">CLEAR</button>
-          </div>
+        <!-- MODE -->
+
+        <section class="control-section">
+
+            <div class="section-label">
+                RENDER MODE
+                <span>01</span>
+            </div>
+
+            <div class="segmented">
+                <button
+                    class="mode active"
+                    data-mode="fluid"
+                    type="button"
+                >
+                    FLUID
+                </button>
+
+                <button
+                    class="mode"
+                    data-mode="ascii"
+                    type="button"
+                >
+                    ASCII
+                </button>
+
+                <button
+                    class="mode"
+                    data-mode="both"
+                    type="button"
+                >
+                    BOTH
+                </button>
+            </div>
+
+        </section>
+
+
+        <!-- SOURCE -->
+
+        <section class="control-section">
+
+            <div class="section-label">
+                SOURCE
+                <span>02</span>
+            </div>
+
+
+            <div class="source-tabs">
+
+                <button
+                    class="source-tab active"
+                    id="tab-image"
+                    type="button"
+                >
+                    IMAGE
+                </button>
+
+                <button
+                    class="source-tab"
+                    id="tab-text"
+                    type="button"
+                >
+                    TEXT
+                </button>
+
+            </div>
+
+
+            <!-- IMAGE SOURCE -->
+
+            <div
+                id="input-image"
+                class="source-content"
+            >
+
+                <label
+                    class="dropzone"
+                    id="dropzone"
+                >
+
+                    <input
+                        type="file"
+                        id="file-input"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        hidden
+                    >
+
+                    <span class="upload-icon">
+                        ↑
+                    </span>
+
+                    <strong>
+                        DROP IMAGE HERE
+                    </strong>
+
+                    <span>
+                        OR CLICK TO SELECT
+                    </span>
+
+                    <small>
+                        JPG / PNG / WEBP
+                    </small>
+
+                </label>
+
+
+                <div
+                    class="image-meta"
+                    id="image-meta"
+                    hidden
+                >
+
+                    <span id="image-name">
+                        image.png
+                    </span>
+
+                    <button
+                        id="image-clear"
+                        type="button"
+                    >
+                        CLEAR
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <!-- TEXT SOURCE -->
+
+            <div
+                id="input-text"
+                class="source-content"
+                hidden
+            >
+
+                <textarea
+                    id="text-input"
+                    maxlength="120"
+                    placeholder="Type something..."
+                    spellcheck="false"
+                ></textarea>
+
+                <div class="text-row">
+
+                    <span id="text-count">
+                        0 / 120
+                    </span>
+
+                    <button
+                        id="text-apply"
+                        type="button"
+                    >
+                        INJECT
+                    </button>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- CONTROLS -->
+
+        <section class="control-section">
+
+            <div class="section-label">
+                FIELD CONTROLS
+                <span>03</span>
+            </div>
+
+
+            <div class="slider-control">
+
+                <div class="slider-head">
+                    <span>TURBULENCE</span>
+                    <b id="turbulence-value">58</b>
+                </div>
+
+                <input
+                    id="s-turbulence"
+                    type="range"
+                    min="0"
+                    max="100"
+                    value="58"
+                >
+
+            </div>
+
+
+            <div class="slider-control">
+
+                <div class="slider-head">
+                    <span>VISCOSITY</span>
+                    <b id="viscosity-value">32</b>
+                </div>
+
+                <input
+                    id="s-viscosity"
+                    type="range"
+                    min="0"
+                    max="100"
+                    value="32"
+                >
+
+            </div>
+
+
+            <div class="slider-control">
+
+                <div class="slider-head">
+                    <span>DENSITY</span>
+                    <b id="density-value">72</b>
+                </div>
+
+                <input
+                    id="s-density"
+                    type="range"
+                    min="20"
+                    max="100"
+                    value="72"
+                >
+
+            </div>
+
+        </section>
+
+
+        <!-- PALETTE -->
+
+        <section class="control-section">
+
+            <div class="section-label">
+                PALETTE
+                <span>04</span>
+            </div>
+
+
+            <div class="palette-grid">
+
+                <button
+                    class="palette active"
+                    data-palette="matrix"
+                    type="button"
+                >
+                    <span class="palette-dot matrix"></span>
+                    <small>MATRIX</small>
+                </button>
+
+
+                <button
+                    class="palette"
+                    data-palette="amber"
+                    type="button"
+                >
+                    <span class="palette-dot amber"></span>
+                    <small>AMBER</small>
+                </button>
+
+
+                <button
+                    class="palette"
+                    data-palette="mono"
+                    type="button"
+                >
+                    <span class="palette-dot mono"></span>
+                    <small>MONO</small>
+                </button>
+
+
+                <button
+                    class="palette"
+                    data-palette="cyan"
+                    type="button"
+                >
+                    <span class="palette-dot cyan"></span>
+                    <small>CYAN</small>
+                </button>
+
+            </div>
+
+        </section>
+
+
+        <!-- ACTIONS -->
+
+        <section class="control-section">
+
+            <div class="section-label">
+                ACTIONS
+                <span>05</span>
+            </div>
+
+
+            <div class="action-row">
+
+                <button
+                    id="btn-reset"
+                    type="button"
+                >
+                    ↻ RESET
+                </button>
+
+                <button
+                    id="btn-save"
+                    type="button"
+                >
+                    ↓ SAVE
+                </button>
+
+            </div>
+
+        </section>
+
+
+        <div class="panel-footer">
+            MOVE POINTER THROUGH FIELD
         </div>
 
-        <div id="input-text" hidden>
-          <textarea id="text-input" maxlength="120" rows="4" spellcheck="false" placeholder="TYPE SOMETHING..."></textarea>
-          <div class="textarea-footer">
-            <span id="text-count">0 / 120</span>
-            <button id="text-apply" type="button">INJECT</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="control-section">
-        <div class="section-label"><b>02</b> RENDER MODE</div>
-
-        <div class="mode-grid">
-          <button class="mode active" data-mode="fluid" type="button"><b>01</b><span>FLUID</span></button>
-          <button class="mode" data-mode="ascii" type="button"><b>02</b><span>ASCII</span></button>
-          <button class="mode" data-mode="both" type="button"><b>03</b><span>BOTH</span></button>
-        </div>
-      </section>
-
-      <section class="control-section">
-        <div class="section-label"><b>03</b> FIELD</div>
-
-        <label class="slider-row">
-          <span>TURBULENCE <output id="turbulence-value">45</output></span>
-          <input id="s-turbulence" type="range" min="0" max="100" value="45">
-        </label>
-
-        <label class="slider-row">
-          <span>VISCOSITY <output id="viscosity-value">20</output></span>
-          <input id="s-viscosity" type="range" min="0" max="100" value="20">
-        </label>
-
-        <label class="slider-row">
-          <span id="density-label">GRAIN <output id="density-value">55</output></span>
-          <input id="s-density" type="range" min="10" max="100" value="55">
-          <small id="density-hint">controls particle density</small>
-        </label>
-      </section>
-
-      <section class="control-section">
-        <div class="section-label">
-          <b>04</b> PALETTE
-          <small>EDIT CSS</small>
-        </div>
-
-        <div class="palette-grid">
-          <button class="palette active palette-source" data-palette="source" type="button" aria-label="Source colors"></button>
-          <button class="palette palette-matrix" data-palette="matrix" type="button" aria-label="Matrix palette"></button>
-          <button class="palette palette-amber" data-palette="amber" type="button" aria-label="Amber palette"></button>
-          <button class="palette palette-mono" data-palette="mono" type="button" aria-label="Monochrome palette"></button>
-        </div>
-      </section>
-
-      <div class="actions">
-        <button id="btn-reset" type="button">↻ RESET</button>
-        <button id="btn-save" type="button">↓ SAVE FRAME</button>
-      </div>
-
-      <footer class="panel-footer">
-        <span>MELT / EXPERIMENTAL MEDIA</span>
-        <span id="fps-counter">-- FPS</span>
-      </footer>
     </aside>
 
-    <button id="panel-toggle" class="panel-toggle" type="button" aria-label="Open controls" aria-expanded="true">
-      <span></span>
-      <span></span>
+
+    <!-- =====================================================
+         RIGHT INFORMATION PANEL
+    ====================================================== -->
+
+    <aside class="info-panel">
+
+        <div class="info-block">
+
+            <div class="info-title">
+                PALETTE PREVIEW
+            </div>
+
+            <div class="preview-dots">
+
+                <span class="preview-dot matrix"></span>
+                <span class="preview-dot amber"></span>
+                <span class="preview-dot cyan"></span>
+                <span class="preview-dot mono"></span>
+
+            </div>
+
+        </div>
+
+
+        <div class="info-block">
+
+            <div class="info-title">
+                FIELD DATA
+            </div>
+
+            <div class="data-row">
+                <span>PARTICLES</span>
+                <b id="particle-count">0000</b>
+            </div>
+
+            <div class="data-row">
+                <span>CELLS</span>
+                <b id="cell-count">000 × 000</b>
+            </div>
+
+            <div class="data-row">
+                <span>SOURCE</span>
+                <b id="source-data">TEXT</b>
+            </div>
+
+        </div>
+
+
+        <div class="mini-map">
+
+            <div class="mini-map-title">
+                FIELD MAP
+            </div>
+
+            <canvas id="mini-canvas"></canvas>
+
+        </div>
+
+    </aside>
+
+
+    <!-- =====================================================
+         PANEL TOGGLE
+    ====================================================== -->
+
+    <button
+        id="panel-toggle"
+        class="panel-toggle"
+        type="button"
+        aria-expanded="true"
+    >
+        =
     </button>
 
-    <div class="boot-screen" id="boot">
-      <div class="boot-box">
-        <strong>MELT</strong>
-        <div class="boot-bar"><i id="boot-progress"></i></div>
-        <p>
-          <span id="boot-text">CREATING FIELD...</span>
-          <span id="boot-percent">00%</span>
-        </p>
-      </div>
+
+    <!-- =====================================================
+         FOOTER
+    ====================================================== -->
+
+    <footer class="bottom-bar">
+
+        <span>
+            MELT.FIELD
+        </span>
+
+        <span id="pointer-x">
+            X 0000
+        </span>
+
+        <span id="pointer-y">
+            Y 0000
+        </span>
+
+        <span class="footer-spacer"></span>
+
+        <span>
+            IMAGE / TEXT / PARTICLES / ASCII
+        </span>
+
+        <span>
+            CTRL + R RESET
+        </span>
+
+    </footer>
+
+
+    <!-- =====================================================
+         BOOT SCREEN
+    ====================================================== -->
+
+    <div
+        class="boot-screen"
+        id="boot"
+    >
+
+        <div class="boot-inner">
+
+            <div class="boot-title">
+                MELT
+            </div>
+
+            <div class="boot-subtitle">
+                GENERATIVE VISUAL ENGINE
+            </div>
+
+            <div class="boot-line">
+                <span id="boot-text">
+                    INITIALIZING FIELD...
+                </span>
+
+                <span id="boot-percent">
+                    00%
+                </span>
+            </div>
+
+            <div class="boot-progress">
+                <span id="boot-progress"></span>
+            </div>
+
+        </div>
+
     </div>
 
-    <div class="error-screen" id="error" hidden>
-      <span>ERROR / 001</span>
-      <strong>FIELD FAILED</strong>
-      <p id="error-text">Something went wrong.</p>
-      <button id="error-retry" type="button">RETRY</button>
-    </div>
-  </main>
 
-  <script src="script.js" defer></script>
+    <!-- =====================================================
+         ERROR
+    ====================================================== -->
+
+    <div
+        class="error-screen"
+        id="error"
+        hidden
+    >
+
+        <div class="error-box">
+
+            <span class="error-code">
+                ERROR / 001
+            </span>
+
+            <h1>
+                FIELD FAILED
+            </h1>
+
+            <p id="error-text">
+                Something went wrong.
+            </p>
+
+            <button
+                id="error-retry"
+                type="button"
+            >
+                REINITIALIZE
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <script src="script.js" defer></script>
+
 </body>
 </html>
