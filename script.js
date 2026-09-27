@@ -1,2432 +1,2398 @@
+/* =========================================================
+   MELT — DIGITAL MATTER EXPERIMENT
+   Canvas 2D Visual Engine
+   No WebGL
+   ========================================================= */
+
 (() => {
     "use strict";
 
+    /* =====================================================
+       HELPERS
+       ===================================================== */
 
-    /* =========================================================
-       CONFIG
-    ========================================================= */
+    const $ = (id) => document.getElementById(id);
 
-    const CONFIG = {
+    const clamp = (v, min, max) =>
+        Math.max(min, Math.min(max, v));
 
-        particles: 6200,
+    const lerp = (a, b, t) =>
+        a + (b - a) * t;
 
-        ambient: 900,
+    const rand = (min = 0, max = 1) =>
+        Math.random() * (max - min) + min;
 
-        trailAlpha: 0.075,
+    const choose = (arr) =>
+        arr[Math.floor(Math.random() * arr.length)];
 
-        particleSize: 1.15,
-
-        mouseRadius: 190,
-
-        mouseForce: 4.2,
-
-        fieldScale: 0.0024,
-
-        swirl: 0.8,
-
-        ribbonCount: 16,
-
-        asciiChars:
-            " .·:+*#%@&$",
-
-        asciiCell: 8
-    };
+    const dist = (x1, y1, x2, y2) =>
+        Math.hypot(x2 - x1, y2 - y1);
 
 
-    /* =========================================================
-       DOM
-    ========================================================= */
-
-    const $ = id =>
-        document.getElementById(id);
-
+    /* =====================================================
+       CANVAS
+       ===================================================== */
 
     const fluidCanvas =
-        $("fluid-canvas");
+        $("fluid-canvas") ||
+        $("glcanvas") ||
+        document.querySelector("canvas");
 
     const asciiCanvas =
-        $("ascii-canvas");
+        $("ascii-canvas") ||
+        $("asciicanvas");
 
-    const miniCanvas =
-        $("mini-canvas");
+    if (!fluidCanvas) {
+        console.warn("MELT: fluid canvas not found.");
+        return;
+    }
 
+    const fluid =
+        fluidCanvas.getContext("2d", {
+            alpha: true
+        });
 
-    if (
-        !fluidCanvas ||
-        !asciiCanvas
-    ) {
-        console.error(
-            "MELT: Canvas not found."
-        );
+    const ascii =
+        asciiCanvas
+            ? asciiCanvas.getContext("2d", {
+                alpha: true
+            })
+            : null;
 
+    if (!fluid) {
+        console.warn("MELT: Canvas 2D context unavailable.");
         return;
     }
 
 
-    const fluid =
-        fluidCanvas.getContext(
-            "2d",
-            {
-                alpha: false
-            }
-        );
+    /* =====================================================
+       UI
+       ===================================================== */
+
+    const boot = $("boot");
+    const bootProgress = $("boot-progress");
+    const bootText = $("boot-text");
+    const bootPercent = $("boot-percent");
+
+    const statusText =
+        $("status-text") ||
+        $("status");
+
+    const statusDot =
+        $("status-dot");
+
+    const fileInput =
+        $("file-input");
+
+    const dropzone =
+        $("dropzone");
+
+    const textInput =
+        $("text-input");
+
+    const textApply =
+        $("text-apply");
+
+    const resetButton =
+        $("reset") ||
+        $("reset-button");
+
+    const saveButton =
+        $("save") ||
+        $("save-frame");
+
+    const panelToggle =
+        $("panel-toggle");
+
+    const turbulenceInput =
+        $("turbulence");
+
+    const viscosityInput =
+        $("viscosity");
+
+    const grainInput =
+        $("grain");
+
+    const modeButtons = [
+        ...document.querySelectorAll(
+            ".seg-btn, .mode-btn, [data-mode]"
+        )
+    ];
+
+    const paletteButtons = [
+        ...document.querySelectorAll(
+            ".swatch, .palette-btn, [data-palette]"
+        )
+    ];
 
 
-    const ascii =
-        asciiCanvas.getContext(
-            "2d"
-        );
+    /* =====================================================
+       CONFIG
+       ===================================================== */
+
+    const CONFIG = {
+
+        particleCount: 1700,
+
+        trailParticles: 260,
+
+        maxParticles: 2600,
+
+        sourceWidth: 620,
+
+        sourceHeight: 320,
+
+        sampleStep: 5,
+
+        particleSize: 1.4,
+
+        defaultTurbulence: 0.55,
+
+        defaultViscosity: 0.88,
+
+        defaultGrain: 0.16,
+
+        interactionRadius: 170,
+
+        textSize: 118,
+
+        textMaxWidth: 580,
+
+        idleSpeed: 0.00045,
+
+        waveStrength: 0.9,
+
+        distortionStrength: 1.0
+
+    };
 
 
-    const mini =
-        miniCanvas
-            ? miniCanvas.getContext("2d")
-            : null;
-
-
-    /* =========================================================
-       SOURCE CANVAS
-    ========================================================= */
-
-    const sourceCanvas =
-        document.createElement(
-            "canvas"
-        );
-
-
-    const source =
-        sourceCanvas.getContext(
-            "2d",
-            {
-                willReadFrequently: true
-            }
-        );
-
-
-    sourceCanvas.width = 800;
-    sourceCanvas.height = 500;
-
-
-    /* =========================================================
+    /* =====================================================
        STATE
-    ========================================================= */
+       ===================================================== */
 
-    const state = {
+    const S = {
 
-        width: 1,
-        height: 1,
+        w: 1,
 
-        dpr: 1,
+        h: 1,
 
-        mode: "fluid",
+        dpr: Math.min(
+            window.devicePixelRatio || 1,
+            2
+        ),
+
+        time: 0,
+
+        lastTime: performance.now(),
+
+        frame: 0,
+
+        mode: "both",
 
         palette: "matrix",
 
         sourceType: "text",
 
-        turbulence: 58,
+        sourceText: "MELT",
 
-        viscosity: 32,
+        sourceImage: null,
 
-        density: 72,
+        sourceCanvas: null,
 
-        time: 0,
+        sourceCtx: null,
 
-        lastTime:
-            performance.now(),
+        sourcePoints: [],
+
+        particles: [],
+
+        ribbons: [],
+
+        blocks: [],
+
+        sparks: [],
 
         mouse: {
 
             x: 0,
+
             y: 0,
 
             px: 0,
+
             py: 0,
 
-            vx: 0,
-            vy: 0,
+            active: false,
 
-            active: false
+            down: false
+
         },
 
-        particles: [],
+        settings: {
 
-        ambient: [],
+            turbulence: CONFIG.defaultTurbulence,
 
-        sourcePoints: [],
+            viscosity: CONFIG.defaultViscosity,
 
-        ribbons: [],
+            grain: CONFIG.defaultGrain
 
-        fpsFrames: 0,
+        },
 
-        fpsTime:
-            performance.now()
+        paletteData: null,
+
+        initialized: false,
+
+        booted: false
+
     };
 
 
-    /* =========================================================
+    /* =====================================================
        PALETTES
-    ========================================================= */
+       ===================================================== */
 
     const PALETTES = {
 
-        matrix: [
-            "#e7fff0",
-            "#8affbd",
-            "#38ff91",
-            "#0cae5a",
-            "#063d25"
-        ],
+        matrix: {
 
-        amber: [
-            "#fff4c4",
-            "#ffd166",
-            "#ff9f1c",
-            "#c85b0b",
-            "#421804"
-        ],
+            background: "#020503",
 
-        mono: [
-            "#ffffff",
-            "#d4d4d4",
-            "#999999",
-            "#555555",
-            "#161616"
-        ],
+            primary: "#8affb4",
 
-        cyan: [
-            "#eaffff",
-            "#8ffff1",
-            "#35ead0",
-            "#099f91",
-            "#033d39"
-        ]
+            secondary: "#2f9b59",
+
+            dim: "#174b2d",
+
+            light: "#d8ffe5",
+
+            dark: "#07150c"
+
+        },
+
+        ember: {
+
+            background: "#080303",
+
+            primary: "#ff8f7a",
+
+            secondary: "#a9342b",
+
+            dim: "#4d1713",
+
+            light: "#ffe1da",
+
+            dark: "#160706"
+
+        },
+
+        ice: {
+
+            background: "#03080a",
+
+            primary: "#9feaff",
+
+            secondary: "#397e9a",
+
+            dim: "#173d4a",
+
+            light: "#e0f8ff",
+
+            dark: "#06151a"
+
+        },
+
+        mono: {
+
+            background: "#050505",
+
+            primary: "#eeeeee",
+
+            secondary: "#888888",
+
+            dim: "#333333",
+
+            light: "#ffffff",
+
+            dark: "#111111"
+
+        }
+
     };
 
 
-    /* =========================================================
-       UTILS
-    ========================================================= */
+    S.paletteData =
+        PALETTES[S.palette];
 
-    function clamp(
-        value,
-        min,
-        max
-    ) {
-        return Math.max(
-            min,
-            Math.min(max, value)
-        );
-    }
 
+    /* =====================================================
+       BOOT
+       ===================================================== */
 
-    function lerp(
-        a,
-        b,
-        t
-    ) {
-        return a +
-            (b - a) * t;
-    }
+    function bootSet(progress, message) {
 
+        progress = clamp(progress, 0, 1);
 
-    function random(
-        min,
-        max
-    ) {
-        return min +
-            Math.random() *
-            (max - min);
-    }
+        if (bootProgress) {
+            bootProgress.style.width =
+                `${progress * 100}%`;
+        }
 
+        if (bootPercent) {
+            bootPercent.textContent =
+                `${String(
+                    Math.round(progress * 100)
+                ).padStart(2, "0")}%`;
+        }
 
-    function choose(array) {
-        return array[
-            Math.floor(
-                Math.random() *
-                array.length
-            )
-        ];
-    }
-
-
-    function hexToRgb(hex) {
-
-        const value =
-            hex.replace("#", "");
-
-        return {
-
-            r:
-                parseInt(
-                    value.substring(0, 2),
-                    16
-                ),
-
-            g:
-                parseInt(
-                    value.substring(2, 4),
-                    16
-                ),
-
-            b:
-                parseInt(
-                    value.substring(4, 6),
-                    16
-                )
-        };
-    }
-
-
-    function colorAt(t) {
-
-        const colors =
-            PALETTES[
-                state.palette
-            ];
-
-
-        const position =
-            clamp(t, 0, 1) *
-            (colors.length - 1);
-
-
-        const index =
-            Math.min(
-                colors.length - 2,
-                Math.floor(position)
-            );
-
-
-        const amount =
-            position - index;
-
-
-        const a =
-            hexToRgb(
-                colors[index]
-            );
-
-
-        const b =
-            hexToRgb(
-                colors[index + 1]
-            );
-
-
-        return {
-
-            r: Math.round(
-                lerp(
-                    a.r,
-                    b.r,
-                    amount
-                )
-            ),
-
-            g: Math.round(
-                lerp(
-                    a.g,
-                    b.g,
-                    amount
-                )
-            ),
-
-            b: Math.round(
-                lerp(
-                    a.b,
-                    b.b,
-                    amount
-                )
-            )
-        };
-    }
-
-
-    /* =========================================================
-       SIMPLE NOISE
-    ========================================================= */
-
-    function noise(x, y, t) {
-
-        return (
-
-            Math.sin(
-                x * 1.7 +
-                t * 0.71
-            ) +
-
-            Math.sin(
-                y * 2.1 -
-                t * 0.53
-            ) +
-
-            Math.sin(
-                (x + y) * 1.3 +
-                t * 0.37
-            ) +
-
-            Math.cos(
-                (x - y) * 1.8 -
-                t * 0.29
-            )
-
-        ) / 4;
-    }
-
-
-    /* =========================================================
-       FLOW FIELD
-    ========================================================= */
-
-    function flowAngle(
-        x,
-        y,
-        time
-    ) {
-
-        const nx =
-            x *
-            CONFIG.fieldScale;
-
-
-        const ny =
-            y *
-            CONFIG.fieldScale;
-
-
-        const t =
-            time * 0.00022;
-
-
-        let angle =
-
-            Math.sin(
-                nx * 5.7 +
-                t * 2.1
-            ) * 1.8 +
-
-            Math.cos(
-                ny * 6.2 -
-                t * 1.7
-            ) * 1.4 +
-
-            Math.sin(
-                (nx + ny) * 4.1 +
-                t
-            ) * 2.2 +
-
-            noise(
-                nx * 2,
-                ny * 2,
-                t
-            ) * 2.5;
-
-
-        /*
-          Add several rotating attractors.
-          This creates the "liquid vortex" appearance.
-        */
-
-        const cx =
-            state.width * .52;
-
-        const cy =
-            state.height * .50;
-
-
-        const dx =
-            x - cx;
-
-        const dy =
-            y - cy;
-
-
-        const distance =
-            Math.sqrt(
-                dx * dx +
-                dy * dy
-            ) + 1;
-
-
-        const vortex =
-            Math.atan2(
-                dy,
-                dx
-            ) +
-            Math.PI / 2;
-
-
-        const vortexStrength =
-            clamp(
-                650 / distance,
-                0,
-                2.2
-            );
-
-
-        angle +=
-            vortex *
-            vortexStrength *
-            CONFIG.swirl;
-
-
-        return angle;
-    }
-
-
-    /* =========================================================
-       RESIZE
-    ========================================================= */
-
-    function resize() {
-
-        state.width =
-            window.innerWidth;
-
-        state.height =
-            window.innerHeight;
-
-
-        state.dpr =
-            Math.min(
-                window.devicePixelRatio || 1,
-                2
-            );
-
-
-        const w =
-            Math.floor(
-                state.width *
-                state.dpr
-            );
-
-
-        const h =
-            Math.floor(
-                state.height *
-                state.dpr
-            );
-
-
-        fluidCanvas.width = w;
-        fluidCanvas.height = h;
-
-        asciiCanvas.width = w;
-        asciiCanvas.height = h;
-
-
-        fluidCanvas.style.width =
-            `${state.width}px`;
-
-        fluidCanvas.style.height =
-            `${state.height}px`;
-
-        asciiCanvas.style.width =
-            `${state.width}px`;
-
-        asciiCanvas.style.height =
-            `${state.height}px`;
-
-
-        fluid.setTransform(
-            state.dpr,
-            0,
-            0,
-            state.dpr,
-            0,
-            0
-        );
-
-
-        ascii.setTransform(
-            state.dpr,
-            0,
-            0,
-            state.dpr,
-            0,
-            0
-        );
-
-
-        if (miniCanvas) {
-
-            miniCanvas.width =
-                170;
-
-            miniCanvas.height =
-                110;
+        if (bootText) {
+            bootText.textContent = message;
         }
     }
 
 
-    /* =========================================================
-       TEXT SOURCE
-    ========================================================= */
+    function statusSet(message, online = true) {
 
-    function makeTextSource(
-        text
-    ) {
+        if (statusText) {
+            statusText.textContent = message;
+        }
 
-        source.clearRect(
-            0,
-            0,
-            800,
-            500
-        );
+        if (statusDot) {
+            statusDot.style.opacity =
+                online ? "1" : "0.35";
+        }
+    }
 
 
-        const value =
-            text.trim() ||
-            "MELT";
+    /* =====================================================
+       SOURCE CANVAS
+       ===================================================== */
+
+    function createSourceCanvas() {
+
+        S.sourceCanvas =
+            document.createElement("canvas");
+
+        S.sourceCanvas.width =
+            CONFIG.sourceWidth;
+
+        S.sourceCanvas.height =
+            CONFIG.sourceHeight;
+
+        S.sourceCtx =
+            S.sourceCanvas.getContext("2d", {
+                willReadFrequently: true
+            });
+    }
 
 
-        let fontSize = 180;
+    /* =====================================================
+       CREATE TEXT SOURCE
+       ===================================================== */
 
+    function createTextSource(text) {
+
+        if (!S.sourceCtx) {
+            createSourceCanvas();
+        }
+
+        const ctx = S.sourceCtx;
+
+        const w = CONFIG.sourceWidth;
+        const h = CONFIG.sourceHeight;
+
+        ctx.clearRect(0, 0, w, h);
+
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, w, h);
+
+        text =
+            String(text || "MELT")
+                .trim()
+                .slice(0, 42);
+
+        if (!text) {
+            text = "MELT";
+        }
+
+        let size = CONFIG.textSize;
+
+        ctx.font =
+            `900 ${size}px Arial, Helvetica, sans-serif`;
 
         while (
-            fontSize > 30
+            ctx.measureText(text).width >
+                CONFIG.textMaxWidth &&
+            size > 35
         ) {
 
-            source.font =
-                `900 ${fontSize}px Arial`;
+            size -= 4;
 
-            if (
-                source.measureText(
-                    value
-                ).width <
-                730
-            ) {
-                break;
-            }
-
-            fontSize -= 5;
+            ctx.font =
+                `900 ${size}px Arial, Helvetica, sans-serif`;
         }
 
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
 
-        source.textAlign =
-            "center";
+        const centerX = w / 2;
+        const centerY = h / 2;
 
-        source.textBaseline =
-            "middle";
+        /* Main source */
+        ctx.fillStyle = "#ffffff";
 
-
-        source.fillStyle =
-            "#ffffff";
-
-
-        source.fillText(
-            value,
-            400,
-            250
+        ctx.fillText(
+            text,
+            centerX,
+            centerY
         );
 
+        /* Slight secondary source creates
+           depth for the liquid simulation. */
 
-        state.sourceType =
-            "text";
+        ctx.globalAlpha = 0.32;
 
+        ctx.fillText(
+            text,
+            centerX + 5,
+            centerY + 3
+        );
 
-        buildSourcePoints();
+        ctx.globalAlpha = 1;
+
+        /* Thin horizontal distortion marks */
+
+        for (let i = 0; i < 14; i++) {
+
+            const y =
+                rand(
+                    centerY - size * 0.45,
+                    centerY + size * 0.45
+                );
+
+            const width =
+                rand(30, 190);
+
+            ctx.globalAlpha =
+                rand(0.04, 0.18);
+
+            ctx.fillRect(
+                rand(30, w - width - 30),
+                y,
+                width,
+                rand(1, 3)
+            );
+        }
+
+        ctx.globalAlpha = 1;
+
+        S.sourceType = "text";
+        S.sourceText = text;
+
+        extractSourcePoints();
+
+        rebuildParticles();
+
+        createRibbons();
+
+        createBlocks();
+
+        statusSet("TEXT INJECTED", true);
     }
 
 
-    /* =========================================================
+    /* =====================================================
        IMAGE SOURCE
-    ========================================================= */
+       ===================================================== */
 
-    function makeImageSource(
-        image
-    ) {
+    function createImageSource(image) {
 
-        source.clearRect(
-            0,
-            0,
-            800,
-            500
-        );
+        if (!S.sourceCtx) {
+            createSourceCanvas();
+        }
 
+        const ctx = S.sourceCtx;
+
+        const w = CONFIG.sourceWidth;
+        const h = CONFIG.sourceHeight;
+
+        ctx.clearRect(0, 0, w, h);
+
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, w, h);
 
         const scale =
             Math.min(
-                740 / image.width,
-                440 / image.height
+                w / image.width,
+                h / image.height
             );
 
-
-        const width =
+        const dw =
             image.width * scale;
 
-        const height =
+        const dh =
             image.height * scale;
 
+        const dx =
+            (w - dw) / 2;
 
-        source.drawImage(
+        const dy =
+            (h - dh) / 2;
+
+        ctx.drawImage(
             image,
-
-            400 -
-                width / 2,
-
-            250 -
-                height / 2,
-
-            width,
-            height
+            dx,
+            dy,
+            dw,
+            dh
         );
 
+        /* Convert image to strong monochrome
+           source for the matter field. */
 
-        state.sourceType =
-            "image";
+        const imageData =
+            ctx.getImageData(
+                0,
+                0,
+                w,
+                h
+            );
 
+        const data =
+            imageData.data;
 
-        buildSourcePoints();
+        for (
+            let i = 0;
+            i < data.length;
+            i += 4
+        ) {
+
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+
+            const brightness =
+                (r * 0.299) +
+                (g * 0.587) +
+                (b * 0.114);
+
+            const value =
+                brightness > 100
+                    ? 255
+                    : brightness * 0.35;
+
+            data[i] = value;
+            data[i + 1] = value;
+            data[i + 2] = value;
+        }
+
+        ctx.putImageData(
+            imageData,
+            0,
+            0
+        );
+
+        S.sourceType = "image";
+        S.sourceImage = image;
+
+        extractSourcePoints();
+
+        rebuildParticles();
+
+        createRibbons();
+
+        createBlocks();
+
+        statusSet("IMAGE INJECTED", true);
     }
 
 
-    /* =========================================================
-       SOURCE POINTS
-    ========================================================= */
+    /* =====================================================
+       EXTRACT SOURCE POINTS
+       ===================================================== */
 
-    function buildSourcePoints() {
+    function extractSourcePoints() {
 
-        const pixels =
-            source.getImageData(
+        S.sourcePoints.length = 0;
+
+        if (!S.sourceCtx) {
+            return;
+        }
+
+        const w = CONFIG.sourceWidth;
+        const h = CONFIG.sourceHeight;
+
+        const image =
+            S.sourceCtx.getImageData(
                 0,
                 0,
-                800,
-                500
-            ).data;
-
-
-        state.sourcePoints = [];
-
-
-        /*
-          Density changes the sampling resolution.
-        */
-
-        const spacing =
-            lerp(
-                8,
-                3,
-                state.density / 100
+                w,
+                h
             );
 
+        const data = image.data;
+
+        const step =
+            CONFIG.sampleStep;
 
         for (
             let y = 0;
-            y < 500;
-            y += spacing
+            y < h;
+            y += step
         ) {
 
             for (
                 let x = 0;
-                x < 800;
-                x += spacing
+                x < w;
+                x += step
             ) {
 
-                const ix =
-                    Math.floor(x);
-
-                const iy =
-                    Math.floor(y);
-
-
                 const index =
-                    (
-                        iy * 800 +
-                        ix
-                    ) * 4;
-
-
-                const r =
-                    pixels[index];
-
-                const g =
-                    pixels[index + 1];
-
-                const b =
-                    pixels[index + 2];
-
-                const alpha =
-                    pixels[index + 3];
-
+                    ((y * w) + x) * 4;
 
                 const brightness =
-                    (
-                        r +
-                        g +
-                        b
-                    ) / 3;
+                    data[index];
 
+                if (brightness > 55) {
 
-                if (
-                    alpha > 40 &&
-                    brightness > 18
-                ) {
-
-                    state.sourcePoints.push({
+                    S.sourcePoints.push({
 
                         x,
+
                         y,
 
-                        brightness:
+                        strength:
                             brightness / 255
+
                     });
                 }
             }
         }
 
+        /* Avoid excessive source points */
 
-        rebuildParticles();
-    }
-
-
-    /* =========================================================
-       PARTICLE
-    ========================================================= */
-
-    class Particle {
-
-        constructor(
-            point,
-            index
+        if (
+            S.sourcePoints.length >
+            CONFIG.maxParticles
         ) {
 
-            const scale =
-                Math.min(
-                    state.width / 800,
-                    state.height / 500
-                );
-
-
-            const offsetX =
-                (
-                    state.width -
-                    800 * scale
-                ) / 2;
-
-
-            const offsetY =
-                (
-                    state.height -
-                    500 * scale
-                ) / 2;
-
-
-            this.homeX =
-                offsetX +
-                point.x *
-                scale;
-
-
-            this.homeY =
-                offsetY +
-                point.y *
-                scale;
-
-
-            /*
-              Don't start exactly at the source.
-              This creates the "melt" reveal.
-            */
-
-            const spread =
-                random(
-                    0,
-                    140
-                );
-
-
-            const angle =
-                random(
-                    0,
-                    Math.PI * 2
-                );
-
-
-            this.x =
-                this.homeX +
-                Math.cos(angle) *
-                spread;
-
-
-            this.y =
-                this.homeY +
-                Math.sin(angle) *
-                spread;
-
-
-            this.vx =
-                random(
-                    -1.5,
-                    1.5
-                );
-
-
-            this.vy =
-                random(
-                    -1.5,
-                    1.5
-                );
-
-
-            this.size =
-                random(
-                    .35,
-                    1.7
-                );
-
-
-            this.alpha =
-                random(
-                    .35,
-                    .95
-                ) *
-                point.brightness;
-
-
-            this.brightness =
-                point.brightness;
-
-
-            this.seed =
-                random(
-                    0,
-                    10000
-                );
-
-
-            this.index =
-                index;
-        }
-
-
-        update(dt) {
-
-            const angle =
-                flowAngle(
-                    this.x,
-                    this.y,
-                    state.time +
-                    this.seed * 100
-                );
-
-
-            const turbulence =
-                state.turbulence /
-                100;
-
-
-            /*
-              FLOW
-            */
-
-            const force =
-                (
-                    0.018 +
-                    turbulence *
-                    0.045
-                ) *
-                dt *
-                60;
-
-
-            this.vx +=
-                Math.cos(angle) *
-                force;
-
-
-            this.vy +=
-                Math.sin(angle) *
-                force;
-
-
-            /*
-              SOURCE GRAVITY
-
-              This is what allows text/image
-              to remain recognizable while
-              still behaving like liquid.
-            */
-
-            const dx =
-                this.homeX -
-                this.x;
-
-            const dy =
-                this.homeY -
-                this.y;
-
-
-            const homeDistance =
-                Math.sqrt(
-                    dx * dx +
-                    dy * dy
-                );
-
-
-            const viscosity =
-                state.viscosity /
-                100;
-
-
-            const homeForce =
-                (
-                    .00025 +
-                    viscosity *
-                    .0018
-                );
-
-
-            this.vx +=
-                dx *
-                homeForce;
-
-
-            this.vy +=
-                dy *
-                homeForce;
-
-
-            /*
-              LOCAL VORTEX
-            */
-
-            const cx =
-                state.width * .50;
-
-            const cy =
-                state.height * .50;
-
-
-            const rx =
-                this.x - cx;
-
-            const ry =
-                this.y - cy;
-
-
-            const radius =
-                Math.sqrt(
-                    rx * rx +
-                    ry * ry
-                ) + 1;
-
-
-            const swirl =
-                clamp(
-                    280 / radius,
-                    0,
-                    1.8
-                ) *
-                turbulence *
-                .018;
-
-
-            this.vx +=
-                (-ry / radius) *
-                swirl *
-                dt *
-                60;
-
-
-            this.vy +=
-                (rx / radius) *
-                swirl *
-                dt *
-                60;
-
-
-            /*
-              MOUSE FORCE
-            */
-
-            if (
-                state.mouse.active
+            const reduced = [];
+
+            const ratio =
+                CONFIG.maxParticles /
+                S.sourcePoints.length;
+
+            for (
+                const point
+                of S.sourcePoints
             ) {
 
-                const mx =
-                    this.x -
-                    state.mouse.x;
-
-
-                const my =
-                    this.y -
-                    state.mouse.y;
-
-
-                const distance =
-                    Math.sqrt(
-                        mx * mx +
-                        my * my
-                    );
-
-
-                const radius =
-                    CONFIG.mouseRadius;
-
-
-                if (
-                    distance <
-                    radius &&
-                    distance >
-                    0.01
-                ) {
-
-                    const amount =
-                        Math.pow(
-                            1 -
-                            distance /
-                            radius,
-                            2
-                        );
-
-
-                    const force =
-                        CONFIG.mouseForce *
-                        amount *
-                        dt;
-
-
-                    this.vx +=
-                        (
-                            mx /
-                            distance
-                        ) *
-                        force;
-
-
-                    this.vy +=
-                        (
-                            my /
-                            distance
-                        ) *
-                        force;
-
-
-                    /*
-                      Mouse movement also drags
-                      the liquid.
-                    */
-
-                    this.vx +=
-                        state.mouse.vx *
-                        amount *
-                        .025;
-
-
-                    this.vy +=
-                        state.mouse.vy *
-                        amount *
-                        .025;
+                if (Math.random() < ratio) {
+                    reduced.push(point);
                 }
             }
 
-
-            /*
-              DRAG
-            */
-
-            const drag =
-                lerp(
-                    .985,
-                    .90,
-                    viscosity
-                );
-
-
-            this.vx *= drag;
-            this.vy *= drag;
-
-
-            /*
-              POSITION
-            */
-
-            this.x +=
-                this.vx *
-                dt *
-                60;
-
-
-            this.y +=
-                this.vy *
-                dt *
-                60;
-
-
-            /*
-              KEEP FIELD ALIVE
-            */
-
-            const margin = 100;
-
-
-            if (
-                this.x < -margin
-            ) {
-                this.x =
-                    state.width +
-                    margin;
-            }
-
-
-            if (
-                this.x >
-                state.width +
-                margin
-            ) {
-                this.x = -margin;
-            }
-
-
-            if (
-                this.y < -margin
-            ) {
-                this.y =
-                    state.height +
-                    margin;
-            }
-
-
-            if (
-                this.y >
-                state.height +
-                margin
-            ) {
-                this.y = -margin;
-            }
-
-
-            /*
-              Prevent extremely distant particles
-              from permanently leaving the composition.
-            */
-
-            if (
-                homeDistance >
-                Math.max(
-                    state.width,
-                    state.height
-                ) * 1.2
-            ) {
-
-                this.x =
-                    lerp(
-                        this.x,
-                        this.homeX,
-                        .02
-                    );
-
-                this.y =
-                    lerp(
-                        this.y,
-                        this.homeY,
-                        .02
-                    );
-            }
-        }
-
-
-        draw() {
-
-            const color =
-                colorAt(
-                    this.brightness
-                );
-
-
-            fluid.globalAlpha =
-                this.alpha;
-
-
-            fluid.fillStyle =
-                `rgb(
-                    ${color.r},
-                    ${color.g},
-                    ${color.b}
-                )`;
-
-
-            fluid.fillRect(
-                this.x,
-                this.y,
-                this.size,
-                this.size
-            );
+            S.sourcePoints =
+                reduced;
         }
     }
 
 
-    /* =========================================================
-       BUILD PARTICLES
-    ========================================================= */
+    /* =====================================================
+       MAP SOURCE TO SCREEN
+       ===================================================== */
+
+    function sourceToScreen(point) {
+
+        const scale =
+            Math.min(
+                S.w / CONFIG.sourceWidth,
+                S.h / CONFIG.sourceHeight
+            ) * 0.72;
+
+        const width =
+            CONFIG.sourceWidth * scale;
+
+        const height =
+            CONFIG.sourceHeight * scale;
+
+        const ox =
+            (S.w - width) / 2;
+
+        const oy =
+            (S.h - height) / 2;
+
+        return {
+
+            x:
+                ox + point.x * scale,
+
+            y:
+                oy + point.y * scale,
+
+            scale
+
+        };
+    }
+
+
+    /* =====================================================
+       PARTICLES
+       ===================================================== */
+
+    function makeParticle(point, index) {
+
+        const p =
+            sourceToScreen(point);
+
+        return {
+
+            ox: p.x,
+
+            oy: p.y,
+
+            x:
+                p.x + rand(-10, 10),
+
+            y:
+                p.y + rand(-10, 10),
+
+            vx: rand(-0.2, 0.2),
+
+            vy: rand(-0.2, 0.2),
+
+            size:
+                rand(0.5, 1.9) *
+                (0.6 + point.strength),
+
+            life:
+                rand(0, Math.PI * 2),
+
+            seed:
+                rand(0, 10000),
+
+            strength:
+                point.strength,
+
+            index
+
+        };
+    }
+
 
     function rebuildParticles() {
 
-        state.particles = [];
+        S.particles.length = 0;
 
+        const points =
+            S.sourcePoints;
 
-        if (
-            !state.sourcePoints.length
-        ) {
+        if (!points.length) {
             return;
         }
 
-
-        /*
-          Don't use every source point.
-          This prevents slowdowns on large images.
-        */
-
-        const target =
-            Math.floor(
-                lerp(
-                    1800,
-                    CONFIG.particles,
-                    state.density / 100
-                )
+        const amount =
+            Math.min(
+                CONFIG.particleCount,
+                points.length
             );
-
-
-        const points =
-            state.sourcePoints;
-
-
-        const step =
-            Math.max(
-                1,
-                Math.floor(
-                    points.length /
-                    target
-                )
-            );
-
-
-        let index = 0;
-
 
         for (
             let i = 0;
-            i < points.length;
-            i += step
-        ) {
-
-            state.particles.push(
-                new Particle(
-                    points[i],
-                    index
-                )
-            );
-
-
-            index++;
-
-
-            if (
-                state.particles.length >=
-                target
-            ) {
-                break;
-            }
-        }
-
-
-        const count =
-            state.particles.length;
-
-
-        const countElement =
-            $("particle-count");
-
-
-        if (countElement) {
-
-            countElement.textContent =
-                count.toLocaleString();
-        }
-
-
-        const sourceElement =
-            $("source-data");
-
-
-        if (sourceElement) {
-
-            sourceElement.textContent =
-                state.sourceType
-                    .toUpperCase();
-        }
-    }
-
-
-    /* =========================================================
-       AMBIENT PARTICLES
-    ========================================================= */
-
-    function buildAmbient() {
-
-        state.ambient = [];
-
-
-        for (
-            let i = 0;
-            i < CONFIG.ambient;
+            i < amount;
             i++
         ) {
 
-            state.ambient.push({
+            const point =
+                points[
+                    Math.floor(
+                        Math.random() *
+                        points.length
+                    )
+                ];
+
+            S.particles.push(
+                makeParticle(
+                    point,
+                    i
+                )
+            );
+        }
+
+        for (
+            let i = 0;
+            i < CONFIG.trailParticles;
+            i++
+        ) {
+
+            const point =
+                choose(points);
+
+            const p =
+                sourceToScreen(point);
+
+            S.particles.push({
+
+                ox: p.x,
+
+                oy: p.y,
 
                 x:
-                    random(
-                        0,
-                        state.width
-                    ),
+                    p.x + rand(-100, 100),
 
                 y:
-                    random(
-                        0,
-                        state.height
-                    ),
+                    p.y + rand(-100, 100),
 
-                size:
-                    random(
-                        .2,
-                        1.1
-                    ),
+                vx: rand(-1, 1),
 
-                alpha:
-                    random(
-                        .03,
-                        .25
-                    ),
+                vy: rand(-1, 1),
 
-                speed:
-                    random(
-                        .03,
-                        .22
-                    ),
+                size: rand(0.4, 1.2),
 
-                seed:
-                    random(
-                        0,
-                        10000
-                    )
+                life: rand(0, 6),
+
+                seed: rand(0, 99999),
+
+                strength:
+                    point.strength * 0.5,
+
+                index:
+                    points.length + i
+
             });
         }
     }
 
 
-    /* =========================================================
-       RIBBON SYSTEM
-    ========================================================= */
+    /* =====================================================
+       FLOW FIELD
+       ===================================================== */
 
-    function drawRibbons() {
+    function flowField(x, y, t, seed) {
 
-        const t =
-            state.time *
-            .00035;
+        const turbulence =
+            S.settings.turbulence;
 
+        const scale = 0.0065;
 
-        for (
-            let r = 0;
-            r < CONFIG.ribbonCount;
-            r++
-        ) {
-
-            const base =
-                r /
-                CONFIG.ribbonCount;
-
-
-            let x =
-                state.width *
-                (
-                    .18 +
-                    base *
-                    .64
-                );
-
-
-            let y =
-                state.height *
-                (
-                    .20 +
-                    Math.sin(
-                        base *
-                        Math.PI *
-                        4 +
-                        t
-                    ) *
-                    .25
-                );
-
-
-            fluid.beginPath();
-
-
-            fluid.moveTo(
-                x,
-                y
+        const a =
+            Math.sin(
+                x * scale +
+                t * 1.2 +
+                seed
             );
 
+        const b =
+            Math.cos(
+                y * scale * 1.3 -
+                t * 0.9 +
+                seed * 0.4
+            );
 
-            for (
-                let i = 0;
-                i < 28;
-                i++
-            ) {
+        const c =
+            Math.sin(
+                (x + y) *
+                scale *
+                0.45 +
+                t * 0.65
+            );
 
-                const progress =
-                    i / 27;
+        const d =
+            Math.cos(
+                (x - y) *
+                scale *
+                0.35 -
+                t * 0.5
+            );
 
+        return {
 
-                const wave =
-                    Math.sin(
-                        progress *
-                        9 +
-                        r *
-                        .7 +
-                        t *
-                        2
-                    );
+            x:
+                (a + c) *
+                turbulence,
 
+            y:
+                (b - d) *
+                turbulence
 
-                const wave2 =
-                    Math.cos(
-                        progress *
-                        7 -
-                        r *
-                        .35 +
-                        t
-                    );
-
-
-                x +=
-                    state.width *
-                    .025;
-
-
-                y +=
-                    wave *
-                    (
-                        4 +
-                        state.turbulence *
-                        .10
-                    );
+        };
+    }
 
 
-                y +=
-                    wave2 *
-                    2;
+    /* =====================================================
+       PARTICLE UPDATE
+       ===================================================== */
 
+    function updateParticles(dt) {
 
-                fluid.lineTo(
-                    x,
-                    y
+        const mouse =
+            S.mouse;
+
+        const time =
+            S.time;
+
+        const viscosity =
+            S.settings.viscosity;
+
+        for (
+            const p
+            of S.particles
+        ) {
+
+            const flow =
+                flowField(
+                    p.x,
+                    p.y,
+                    time,
+                    p.seed * 0.001
                 );
+
+            p.vx +=
+                flow.x *
+                0.025 *
+                dt;
+
+            p.vy +=
+                flow.y *
+                0.025 *
+                dt;
+
+            /* Return force toward source */
+
+            const dx =
+                p.ox - p.x;
+
+            const dy =
+                p.oy - p.y;
+
+            const distance =
+                Math.hypot(dx, dy) + 0.001;
+
+            const returnForce =
+                0.0035 *
+                viscosity;
+
+            p.vx +=
+                dx *
+                returnForce;
+
+            p.vy +=
+                dy *
+                returnForce;
+
+            /* Organic oscillation */
+
+            const wave =
+                Math.sin(
+                    time * 2.0 +
+                    p.seed
+                );
+
+            p.vx +=
+                wave *
+                0.006;
+
+            p.vy +=
+                Math.cos(
+                    time * 1.7 +
+                    p.seed * 0.7
+                ) *
+                0.006;
+
+            /* Mouse interaction */
+
+            if (mouse.active) {
+
+                const md =
+                    dist(
+                        p.x,
+                        p.y,
+                        mouse.x,
+                        mouse.y
+                    );
+
+                if (
+                    md <
+                    CONFIG.interactionRadius
+                ) {
+
+                    const force =
+                        1 -
+                        md /
+                        CONFIG.interactionRadius;
+
+                    const angle =
+                        Math.atan2(
+                            p.y - mouse.y,
+                            p.x - mouse.x
+                        );
+
+                    const push =
+                        force *
+                        force *
+                        (mouse.down
+                            ? 1.7
+                            : 0.65);
+
+                    p.vx +=
+                        Math.cos(angle) *
+                        push;
+
+                    p.vy +=
+                        Math.sin(angle) *
+                        push;
+
+                    /* swirl */
+
+                    p.vx +=
+                        -Math.sin(angle) *
+                        force *
+                        0.7;
+
+                    p.vy +=
+                        Math.cos(angle) *
+                        force *
+                        0.7;
+                }
             }
 
+            /* Damping */
 
-            const color =
-                colorAt(
-                    .25 +
-                    base *
-                    .65
+            p.vx *=
+                Math.pow(
+                    viscosity,
+                    dt * 0.06
                 );
 
+            p.vy *=
+                Math.pow(
+                    viscosity,
+                    dt * 0.06
+                );
 
-            fluid.strokeStyle =
-                `rgba(
-                    ${color.r},
-                    ${color.g},
-                    ${color.b},
-                    .025
-                )`;
+            p.x +=
+                p.vx * dt;
 
+            p.y +=
+                p.vy * dt;
 
-            fluid.lineWidth =
-                1 +
-                base * 3;
+            /* Very soft screen containment */
 
+            if (
+                p.x < -100 ||
+                p.x > S.w + 100 ||
+                p.y < -100 ||
+                p.y > S.h + 100
+            ) {
 
-            fluid.stroke();
+                p.x =
+                    lerp(
+                        p.x,
+                        p.ox,
+                        0.02
+                    );
+
+                p.y =
+                    lerp(
+                        p.y,
+                        p.oy,
+                        0.02
+                    );
+            }
         }
     }
 
 
-    /* =========================================================
-       FLUID RENDER
-    ========================================================= */
+    /* =====================================================
+       RIBBONS
+       ===================================================== */
 
-    function renderFluid() {
+    function createRibbons() {
 
-        /*
-          Transparent black overlay = trails.
-        */
+        S.ribbons.length = 0;
 
-        fluid.globalCompositeOperation =
-            "source-over";
-
-
-        fluid.fillStyle =
-            `rgba(
-                1,
-                4,
-                2,
-                ${CONFIG.trailAlpha}
-            )`;
-
-
-        fluid.fillRect(
-            0,
-            0,
-            state.width,
-            state.height
-        );
-
-
-        /*
-          Large subtle ribbons.
-        */
-
-        drawRibbons();
-
-
-        /*
-          Ambient dust.
-        */
+        const count = 34;
 
         for (
-            const p of
-            state.ambient
+            let i = 0;
+            i < count;
+            i++
         ) {
 
-            const color =
-                colorAt(
-                    .45
-                );
+            const points = [];
 
+            const y =
+                S.h * 0.25 +
+                (i / count) *
+                S.h * 0.5;
 
-            fluid.globalAlpha =
-                p.alpha;
-
-
-            fluid.fillStyle =
-                `rgb(
-                    ${color.r},
-                    ${color.g},
-                    ${color.b}
-                )`;
-
-
-            fluid.fillRect(
-                p.x,
-                p.y,
-                p.size,
-                p.size
-            );
-
-
-            p.y -=
-                p.speed;
-
-
-            p.x +=
-                Math.sin(
-                    state.time *
-                    .0004 +
-                    p.seed
-                ) *
-                .15;
-
-
-            if (
-                p.y < -5
+            for (
+                let j = 0;
+                j < 30;
+                j++
             ) {
 
-                p.y =
-                    state.height +
-                    5;
+                points.push({
+
+                    x:
+                        -100 +
+                        j *
+                        ((S.w + 200) / 29),
+
+                    y:
+                        y +
+                        rand(-25, 25),
+
+                    phase:
+                        rand(
+                            0,
+                            Math.PI * 2
+                        ),
+
+                    speed:
+                        rand(
+                            0.4,
+                            1.2
+                        )
+
+                });
+            }
+
+            S.ribbons.push(points);
+        }
+    }
+
+
+    function updateRibbons() {
+
+        for (
+            const ribbon
+            of S.ribbons
+        ) {
+
+            for (
+                const p
+                of ribbon
+            ) {
+
+                p.y +=
+                    Math.sin(
+                        S.time *
+                        p.speed +
+                        p.phase +
+                        p.x * 0.003
+                    ) *
+                    0.45;
+
+                p.y +=
+                    Math.sin(
+                        S.time * 0.7 +
+                        p.x * 0.008
+                    ) *
+                    0.25;
             }
         }
+    }
 
 
-        /*
-          Main particles.
-        */
+    function drawRibbons() {
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
+
+        fluid.globalCompositeOperation =
+            "screen";
+
+        fluid.lineWidth = 0.7;
+
+        for (
+            let r = 0;
+            r < S.ribbons.length;
+            r++
+        ) {
+
+            const ribbon =
+                S.ribbons[r];
+
+            fluid.beginPath();
+
+            for (
+                let i = 0;
+                i < ribbon.length;
+                i++
+            ) {
+
+                const p =
+                    ribbon[i];
+
+                const wave =
+                    Math.sin(
+                        S.time * 1.2 +
+                        i * 0.35 +
+                        r
+                    ) *
+                    10 *
+                    S.settings.turbulence;
+
+                const x = p.x;
+
+                const y =
+                    p.y + wave;
+
+                if (i === 0) {
+                    fluid.moveTo(x, y);
+                } else {
+                    fluid.lineTo(x, y);
+                }
+            }
+
+            const alpha =
+                0.025 +
+                (r % 5) * 0.006;
+
+            fluid.strokeStyle =
+                `rgba(138,255,180,${alpha})`;
+
+            fluid.stroke();
+        }
+
+        fluid.restore();
+    }
+
+
+    /* =====================================================
+       BLOCKS
+       ===================================================== */
+
+    function createBlocks() {
+
+        S.blocks.length = 0;
+
+        for (
+            let i = 0;
+            i < 75;
+            i++
+        ) {
+
+            S.blocks.push({
+
+                x: rand(0, S.w),
+
+                y: rand(
+                    S.h * 0.2,
+                    S.h * 0.8
+                ),
+
+                w:
+                    rand(3, 40),
+
+                h:
+                    rand(1, 6),
+
+                speed:
+                    rand(
+                        0.2,
+                        1.4
+                    ),
+
+                phase:
+                    rand(0, 10),
+
+                alpha:
+                    rand(
+                        0.05,
+                        0.3
+                    )
+
+            });
+        }
+    }
+
+
+    function updateBlocks() {
+
+        for (
+            const b
+            of S.blocks
+        ) {
+
+            b.x -=
+                b.speed *
+                S.settings.turbulence;
+
+            b.y +=
+                Math.sin(
+                    S.time +
+                    b.phase
+                ) *
+                0.15;
+
+            if (b.x < -60) {
+                b.x = S.w + 60;
+            }
+        }
+    }
+
+
+    function drawBlocks() {
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
+
+        fluid.globalCompositeOperation =
+            "screen";
+
+        for (
+            const b
+            of S.blocks
+        ) {
+
+            fluid.globalAlpha =
+                b.alpha;
+
+            fluid.fillStyle =
+                P.secondary;
+
+            fluid.fillRect(
+                b.x,
+                b.y,
+                b.w,
+                b.h
+            );
+        }
+
+        fluid.restore();
+    }
+
+
+    /* =====================================================
+       SPARKS
+       ===================================================== */
+
+    function createSparks() {
+
+        S.sparks.length = 0;
+
+        for (
+            let i = 0;
+            i < 110;
+            i++
+        ) {
+
+            S.sparks.push({
+
+                x: rand(0, S.w),
+
+                y: rand(0, S.h),
+
+                size:
+                    rand(0.3, 1.4),
+
+                phase:
+                    rand(0, 20),
+
+                speed:
+                    rand(0.2, 1.5),
+
+                alpha:
+                    rand(0.15, 0.8)
+
+            });
+        }
+    }
+
+
+    function drawSparks() {
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
+
+        fluid.fillStyle =
+            P.light;
+
+        for (
+            const s
+            of S.sparks
+        ) {
+
+            const flicker =
+                (
+                    Math.sin(
+                        S.time *
+                        s.speed *
+                        4 +
+                        s.phase
+                    ) + 1
+                ) / 2;
+
+            fluid.globalAlpha =
+                s.alpha *
+                flicker;
+
+            fluid.fillRect(
+                s.x,
+                s.y,
+                s.size,
+                s.size
+            );
+        }
+
+        fluid.restore();
+    }
+
+
+    /* =====================================================
+       PARTICLE DRAW
+       ===================================================== */
+
+    function drawParticles() {
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
 
         fluid.globalCompositeOperation =
             "lighter";
 
-
         for (
-            const particle of
-            state.particles
+            const p
+            of S.particles
         ) {
 
-            particle.draw();
-        }
-
-
-        /*
-          Glow pass.
-
-          A few larger particles create
-          the luminous liquid-core effect.
-        */
-
-        fluid.globalAlpha =
-            .08;
-
-
-        for (
-            let i = 0;
-            i < state.particles.length;
-            i += 35
-        ) {
-
-            const p =
-                state.particles[i];
-
-
-            const color =
-                colorAt(
-                    p.brightness
-                );
-
-
-            fluid.fillStyle =
-                `rgb(
-                    ${color.r},
-                    ${color.g},
-                    ${color.b}
-                )`;
-
-
-            fluid.beginPath();
-
-
-            fluid.arc(
-                p.x,
-                p.y,
-                3 +
-                    p.brightness *
-                    8,
-                0,
-                Math.PI * 2
-            );
-
-
-            fluid.fill();
-        }
-
-
-        fluid.globalAlpha = 1;
-
-        fluid.globalCompositeOperation =
-            "source-over";
-    }
-
-
-    /* =========================================================
-       ASCII
-    ========================================================= */
-
-    function renderASCII() {
-
-        ascii.clearRect(
-            0,
-            0,
-            state.width,
-            state.height
-        );
-
-
-        /*
-          ASCII is deliberately sparse.
-
-          It is an extra visual layer rather
-          than the entire artwork.
-        */
-
-        const cell =
-            clamp(
-                7 +
-                (100 -
-                    state.density) *
-                .08,
-                7,
-                15
-            );
-
-
-        ascii.font =
-            `${cell}px "Space Mono", monospace`;
-
-
-        ascii.textAlign =
-            "center";
-
-        ascii.textBaseline =
-            "middle";
-
-
-        const characters =
-            CONFIG.asciiChars;
-
-
-        /*
-          Sample PARTICLES instead of the source image.
-
-          This is why ASCII now follows
-          the moving fluid.
-        */
-
-        const amount =
-            Math.min(
-                1700,
-                state.particles.length
-            );
-
-
-        for (
-            let i = 0;
-            i < amount;
-            i += 2
-        ) {
-
-            const p =
-                state.particles[
-                    (
-                        i * 7
-                    ) %
-                    state.particles.length
-                ];
-
-
-            if (
-                !p
-            ) {
-                continue;
-            }
-
-
-            const brightness =
+            const energy =
                 clamp(
-                    p.brightness +
-                    Math.sin(
-                        state.time *
-                        .001 +
-                        p.seed
-                    ) *
-                    .15,
+                    Math.hypot(
+                        p.vx,
+                        p.vy
+                    ) * 0.7,
                     0,
                     1
                 );
 
-
-            const charIndex =
-                Math.floor(
-                    brightness *
-                    (
-                        characters.length -
-                        1
-                    )
+            const alpha =
+                clamp(
+                    0.18 +
+                    p.strength *
+                    0.62 +
+                    energy *
+                    0.2,
+                    0,
+                    1
                 );
 
+            fluid.globalAlpha =
+                alpha;
 
-            const character =
-                characters[
-                    charIndex
-                ];
+            fluid.fillStyle =
+                p.strength > 0.7
+                    ? P.light
+                    : P.primary;
 
-
-            const color =
-                colorAt(
-                    brightness
+            const size =
+                p.size *
+                (
+                    0.7 +
+                    energy
                 );
 
-
-            ascii.fillStyle =
-                `rgba(
-                    ${color.r},
-                    ${color.g},
-                    ${color.b},
-                    ${.15 +
-                        brightness *
-                        .55}
-                )`;
-
-
-            ascii.fillText(
-                character,
+            fluid.fillRect(
                 p.x,
-                p.y
+                p.y,
+                size,
+                size
             );
+
+            /* Motion trail */
+
+            if (
+                energy >
+                0.35
+            ) {
+
+                fluid.globalAlpha =
+                    alpha *
+                    0.22;
+
+                fluid.beginPath();
+
+                fluid.moveTo(
+                    p.x,
+                    p.y
+                );
+
+                fluid.lineTo(
+                    p.x -
+                    p.vx * 8,
+                    p.y -
+                    p.vy * 8
+                );
+
+                fluid.strokeStyle =
+                    P.primary;
+
+                fluid.lineWidth =
+                    size * 0.65;
+
+                fluid.stroke();
+            }
         }
+
+        fluid.restore();
     }
 
 
-    /* =========================================================
-       MINI MAP
-    ========================================================= */
+    /* =====================================================
+       LIQUID BLOOMS
+       ===================================================== */
 
-    function renderMiniMap() {
+    function drawLiquidBloom() {
 
-        if (
-            !mini
-        ) {
-            return;
-        }
+        const P =
+            S.paletteData;
 
+        const centerX =
+            S.w / 2;
 
-        mini.clearRect(
-            0,
-            0,
-            170,
-            110
-        );
+        const centerY =
+            S.h / 2;
 
+        fluid.save();
 
-        mini.fillStyle =
-            "rgba(2,10,6,.9)";
-
-
-        mini.fillRect(
-            0,
-            0,
-            170,
-            110
-        );
-
-
-        const color =
-            colorAt(
-                .65
-            );
-
-
-        mini.fillStyle =
-            `rgba(
-                ${color.r},
-                ${color.g},
-                ${color.b},
-                .65
-            )`;
-
-
-        const scaleX =
-            170 /
-            state.width;
-
-
-        const scaleY =
-            110 /
-            state.height;
-
+        fluid.globalCompositeOperation =
+            "screen";
 
         for (
             let i = 0;
-            i <
-            Math.min(
-                state.particles.length,
-                900
-            );
-            i += 4
+            i < 8;
+            i++
         ) {
 
-            const p =
-                state.particles[i];
+            const angle =
+                S.time *
+                (0.1 + i * 0.017) +
+                i;
+
+            const radius =
+                80 +
+                Math.sin(
+                    S.time * 0.8 +
+                    i
+                ) *
+                50;
+
+            const x =
+                centerX +
+                Math.cos(angle) *
+                radius;
+
+            const y =
+                centerY +
+                Math.sin(angle * 1.4) *
+                radius *
+                0.5;
+
+            const size =
+                40 +
+                Math.sin(
+                    S.time +
+                    i
+                ) *
+                20;
+
+            const gradient =
+                fluid.createRadialGradient(
+                    x,
+                    y,
+                    0,
+                    x,
+                    y,
+                    size
+                );
+
+            gradient.addColorStop(
+                0,
+                "rgba(138,255,180,0.08)"
+            );
+
+            gradient.addColorStop(
+                1,
+                "rgba(138,255,180,0)"
+            );
+
+            fluid.fillStyle =
+                gradient;
+
+            fluid.fillRect(
+                x - size,
+                y - size,
+                size * 2,
+                size * 2
+            );
+        }
+
+        fluid.restore();
+    }
 
 
-            mini.fillRect(
-                p.x * scaleX,
-                p.y * scaleY,
+    /* =====================================================
+       SCANLINES
+       ===================================================== */
+
+    function drawScanlines() {
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
+
+        fluid.globalAlpha = 0.025;
+
+        fluid.fillStyle =
+            P.primary;
+
+        for (
+            let y = 0;
+            y < S.h;
+            y += 5
+        ) {
+
+            fluid.fillRect(
+                0,
+                y,
+                S.w,
+                1
+            );
+        }
+
+        fluid.restore();
+    }
+
+
+    /* =====================================================
+       GRAIN
+       ===================================================== */
+
+    function drawGrain() {
+
+        const amount =
+            S.settings.grain;
+
+        if (amount <= 0) {
+            return;
+        }
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
+
+        fluid.globalAlpha =
+            amount * 0.13;
+
+        fluid.fillStyle =
+            P.light;
+
+        const count =
+            Math.floor(
+                S.w *
+                S.h *
+                0.0007
+            );
+
+        for (
+            let i = 0;
+            i < count;
+            i++
+        ) {
+
+            fluid.fillRect(
+                Math.random() * S.w,
+                Math.random() * S.h,
                 1,
                 1
             );
         }
 
-
-        /*
-          Pointer.
-        */
-
-        if (
-            state.mouse.active
-        ) {
-
-            mini.strokeStyle =
-                "#ffffff";
-
-            mini.strokeRect(
-                state.mouse.x *
-                    scaleX -
-                    2,
-
-                state.mouse.y *
-                    scaleY -
-                    2,
-
-                4,
-                4
-            );
-        }
+        fluid.restore();
     }
 
 
-    /* =========================================================
-       UPDATE
-    ========================================================= */
+    /* =====================================================
+       ASCII
+       ===================================================== */
 
-    function update(dt) {
+    const ASCII_CHARS =
+        "@#%*+=-:. ";
+
+    function drawASCII() {
+
+        if (!ascii) {
+            return;
+        }
+
+        ascii.clearRect(
+            0,
+            0,
+            S.w,
+            S.h
+        );
+
+        if (
+            S.mode !== "ascii" &&
+            S.mode !== "both"
+        ) {
+            return;
+        }
+
+        const P =
+            S.paletteData;
+
+        const cell =
+            Math.max(
+                7,
+                Math.min(
+                    13,
+                    Math.floor(
+                        S.w / 120
+                    )
+                )
+            );
+
+        const source =
+            S.sourceCanvas;
+
+        if (!source) {
+            return;
+        }
+
+        const sw =
+            source.width;
+
+        const sh =
+            source.height;
+
+        const small =
+            document.createElement("canvas");
+
+        small.width =
+            Math.ceil(
+                sw / cell
+            );
+
+        small.height =
+            Math.ceil(
+                sh / cell
+            );
+
+        const sctx =
+            small.getContext("2d", {
+                willReadFrequently: true
+            });
+
+        sctx.drawImage(
+            source,
+            0,
+            0,
+            small.width,
+            small.height
+        );
+
+        const data =
+            sctx.getImageData(
+                0,
+                0,
+                small.width,
+                small.height
+            ).data;
+
+        const scale =
+            Math.min(
+                S.w / sw,
+                S.h / sh
+            ) * 0.72;
+
+        const drawW =
+            sw * scale;
+
+        const drawH =
+            sh * scale;
+
+        const ox =
+            (S.w - drawW) / 2;
+
+        const oy =
+            (S.h - drawH) / 2;
+
+        ascii.save();
+
+        ascii.font =
+            `${Math.max(
+                8,
+                cell * 0.95
+            )}px monospace`;
+
+        ascii.textBaseline =
+            "top";
+
+        ascii.textAlign =
+            "left";
 
         for (
-            const particle of
-            state.particles
+            let y = 0;
+            y < small.height;
+            y++
         ) {
 
-            particle.update(
-                dt
-            );
-        }
-
-
-        state.mouse.vx *= .84;
-        state.mouse.vy *= .84;
-    }
-
-
-    /* =========================================================
-       MAIN RENDER
-    ========================================================= */
-
-    function render() {
-
-        if (
-            state.mode ===
-            "fluid"
-        ) {
-
-            fluidCanvas.style.opacity =
-                "1";
-
-            asciiCanvas.style.opacity =
-                "0";
-
-            renderFluid();
-
-        }
-
-        else if (
-            state.mode ===
-            "ascii"
-        ) {
-
-            fluidCanvas.style.opacity =
-                "0";
-
-            asciiCanvas.style.opacity =
-                "1";
-
-            renderASCII();
-
-        }
-
-        else {
-
-            fluidCanvas.style.opacity =
-                "1";
-
-            asciiCanvas.style.opacity =
-                "1";
-
-            renderFluid();
-            renderASCII();
-        }
-
-
-        renderMiniMap();
-    }
-
-
-    /* =========================================================
-       ANIMATION
-    ========================================================= */
-
-    function animate(now) {
-
-        const dt =
-            clamp(
-                (
-                    now -
-                    state.lastTime
-                ) / 1000,
-
-                .001,
-
-                .033
-            );
-
-
-        state.lastTime =
-            now;
-
-
-        state.time =
-            now;
-
-
-        update(dt);
-
-        render();
-
-
-        /*
-          FPS
-        */
-
-        state.fpsFrames++;
-
-
-        if (
-            now -
-            state.fpsTime >
-            500
-        ) {
-
-            const fps =
-                Math.round(
-                    state.fpsFrames /
-                    (
-                        (
-                            now -
-                            state.fpsTime
-                        ) / 1000
-                    )
-                );
-
-
-            const fpsElement =
-                $("fps-counter");
-
-
-            if (
-                fpsElement
+            for (
+                let x = 0;
+                x < small.width;
+                x++
             ) {
 
-                fpsElement.textContent =
-                    `${fps} FPS`;
+                const index =
+                    (
+                        y *
+                        small.width +
+                        x
+                    ) * 4;
+
+                const brightness =
+                    data[index];
+
+                if (
+                    brightness <
+                    35
+                ) {
+                    continue;
+                }
+
+                const normalized =
+                    brightness / 255;
+
+                const charIndex =
+                    Math.floor(
+                        (
+                            1 -
+                            normalized
+                        ) *
+                        (
+                            ASCII_CHARS.length - 1
+                        )
+                    );
+
+                const char =
+                    ASCII_CHARS[
+                        clamp(
+                            charIndex,
+                            0,
+                            ASCII_CHARS.length - 1
+                        )
+                    ];
+
+                const wave =
+                    Math.sin(
+                        S.time * 2 +
+                        x * 0.2 +
+                        y * 0.15
+                    ) *
+                    2;
+
+                const px =
+                    ox +
+                    x *
+                    cell *
+                    scale +
+                    wave;
+
+                const py =
+                    oy +
+                    y *
+                    cell *
+                    scale;
+
+                ascii.globalAlpha =
+                    0.18 +
+                    normalized *
+                    0.72;
+
+                ascii.fillStyle =
+                    normalized >
+                    0.7
+                        ? P.light
+                        : P.primary;
+
+                ascii.fillText(
+                    char,
+                    px,
+                    py
+                );
             }
-
-
-            state.fpsFrames = 0;
-
-            state.fpsTime =
-                now;
         }
 
+        ascii.restore();
+    }
 
-        requestAnimationFrame(
-            animate
+
+    /* =====================================================
+       FLUID SOURCE GHOST
+       ===================================================== */
+
+    function drawFluidSource() {
+
+        if (
+            S.mode !== "fluid" &&
+            S.mode !== "both"
+        ) {
+            return;
+        }
+
+        if (!S.sourceCanvas) {
+            return;
+        }
+
+        /*
+         * Very subtle source image.
+         * This means FLUID mode isn't dependent
+         * on ASCII to make the injected text visible.
+         */
+
+        const P =
+            S.paletteData;
+
+        const scale =
+            Math.min(
+                S.w / CONFIG.sourceWidth,
+                S.h / CONFIG.sourceHeight
+            ) * 0.72;
+
+        const w =
+            CONFIG.sourceWidth *
+            scale;
+
+        const h =
+            CONFIG.sourceHeight *
+            scale;
+
+        const x =
+            (S.w - w) / 2;
+
+        const y =
+            (S.h - h) / 2;
+
+        fluid.save();
+
+        fluid.globalAlpha = 0.025;
+
+        fluid.globalCompositeOperation =
+            "screen";
+
+        fluid.drawImage(
+            S.sourceCanvas,
+            x,
+            y,
+            w,
+            h
+        );
+
+        fluid.restore();
+    }
+
+
+    /* =====================================================
+       DISTORTION LINES
+       ===================================================== */
+
+    function drawDistortionLines() {
+
+        const P =
+            S.paletteData;
+
+        fluid.save();
+
+        fluid.globalCompositeOperation =
+            "screen";
+
+        for (
+            let i = 0;
+            i < 24;
+            i++
+        ) {
+
+            const y =
+                S.h * 0.2 +
+                (
+                    i /
+                    24
+                ) *
+                S.h * 0.6;
+
+            const offset =
+                Math.sin(
+                    S.time * 1.3 +
+                    i * 0.8
+                ) *
+                (
+                    5 +
+                    S.settings.turbulence *
+                    12
+                );
+
+            const width =
+                rand(
+                    40,
+                    S.w * 0.35
+                );
+
+            fluid.globalAlpha =
+                0.02 +
+                Math.random() *
+                0.025;
+
+            fluid.strokeStyle =
+                P.secondary;
+
+            fluid.beginPath();
+
+            fluid.moveTo(
+                S.w / 2 -
+                width / 2 +
+                offset,
+                y
+            );
+
+            fluid.lineTo(
+                S.w / 2 +
+                width / 2 +
+                offset,
+                y
+            );
+
+            fluid.stroke();
+        }
+
+        fluid.restore();
+    }
+
+
+    /* =====================================================
+       BACKGROUND
+       ===================================================== */
+
+    function drawBackground() {
+
+        const P =
+            S.paletteData;
+
+        fluid.globalCompositeOperation =
+            "source-over";
+
+        fluid.fillStyle =
+            P.background;
+
+        fluid.fillRect(
+            0,
+            0,
+            S.w,
+            S.h
+        );
+
+        /* subtle radial atmosphere */
+
+        const gradient =
+            fluid.createRadialGradient(
+                S.w / 2,
+                S.h / 2,
+                0,
+                S.w / 2,
+                S.h / 2,
+                Math.max(
+                    S.w,
+                    S.h
+                ) * 0.7
+            );
+
+        gradient.addColorStop(
+            0,
+            "rgba(20,70,40,0.08)"
+        );
+
+        gradient.addColorStop(
+            1,
+            "rgba(0,0,0,0)"
+        );
+
+        fluid.fillStyle =
+            gradient;
+
+        fluid.fillRect(
+            0,
+            0,
+            S.w,
+            S.h
         );
     }
 
 
-    /* =========================================================
-       POINTER
-    ========================================================= */
+    /* =====================================================
+       FRAME
+       ===================================================== */
+
+    function frame(now) {
+
+        const delta =
+            Math.min(
+                32,
+                now -
+                S.lastTime
+            );
+
+        S.lastTime =
+            now;
+
+        const dt =
+            delta /
+            16.666;
+
+        S.time +=
+            delta *
+            CONFIG.idleSpeed;
+
+        S.frame++;
+
+        updateParticles(dt);
+
+        updateRibbons();
+
+        updateBlocks();
+
+        drawBackground();
+
+        drawLiquidBloom();
+
+        drawFluidSource();
+
+        drawRibbons();
+
+        drawBlocks();
+
+        drawDistortionLines();
+
+        drawParticles();
+
+        drawSparks();
+
+        drawScanlines();
+
+        drawGrain();
+
+        drawASCII();
+
+        requestAnimationFrame(frame);
+    }
+
+
+    /* =====================================================
+       RESIZE
+       ===================================================== */
+
+    function resizeCanvas(canvas, ctx) {
+
+        if (!canvas || !ctx) {
+            return;
+        }
+
+        const rect =
+            canvas.getBoundingClientRect();
+
+        const width =
+            Math.max(
+                1,
+                Math.floor(
+                    rect.width
+                )
+            );
+
+        const height =
+            Math.max(
+                1,
+                Math.floor(
+                    rect.height
+                )
+            );
+
+        canvas.width =
+            Math.floor(
+                width * S.dpr
+            );
+
+        canvas.height =
+            Math.floor(
+                height * S.dpr
+            );
+
+        ctx.setTransform(
+            S.dpr,
+            0,
+            0,
+            S.dpr,
+            0,
+            0
+        );
+    }
+
+
+    function resize() {
+
+        S.dpr =
+            Math.min(
+                window.devicePixelRatio || 1,
+                2
+            );
+
+        const rect =
+            fluidCanvas.getBoundingClientRect();
+
+        S.w =
+            Math.max(
+                1,
+                rect.width
+            );
+
+        S.h =
+            Math.max(
+                1,
+                rect.height
+            );
+
+        resizeCanvas(
+            fluidCanvas,
+            fluid
+        );
+
+        if (
+            asciiCanvas &&
+            ascii
+        ) {
+
+            resizeCanvas(
+                asciiCanvas,
+                ascii
+            );
+        }
+
+        createRibbons();
+
+        createBlocks();
+
+        createSparks();
+
+        /*
+         * Re-map particle origins after resize.
+         */
+
+        if (
+            S.sourcePoints.length
+        ) {
+
+            rebuildParticles();
+        }
+    }
+
+
+    /* =====================================================
+       MOUSE
+       ===================================================== */
+
+    function pointerMove(event) {
+
+        const rect =
+            fluidCanvas.getBoundingClientRect();
+
+        S.mouse.px =
+            S.mouse.x;
+
+        S.mouse.py =
+            S.mouse.y;
+
+        S.mouse.x =
+            event.clientX -
+            rect.left;
+
+        S.mouse.y =
+            event.clientY -
+            rect.top;
+
+        S.mouse.active =
+            true;
+    }
+
+
+    function pointerDown() {
+
+        S.mouse.down =
+            true;
+    }
+
+
+    function pointerUp() {
+
+        S.mouse.down =
+            false;
+    }
+
 
     fluidCanvas.addEventListener(
         "pointermove",
-        event => {
-
-            const rect =
-                fluidCanvas
-                    .getBoundingClientRect();
-
-
-            const x =
-                event.clientX -
-                rect.left;
-
-
-            const y =
-                event.clientY -
-                rect.top;
-
-
-            state.mouse.vx =
-                x -
-                state.mouse.px;
-
-
-            state.mouse.vy =
-                y -
-                state.mouse.py;
-
-
-            state.mouse.px =
-                x;
-
-            state.mouse.py =
-                y;
-
-
-            state.mouse.x =
-                x;
-
-            state.mouse.y =
-                y;
-
-
-            state.mouse.active =
-                true;
-
-
-            const xElement =
-                $("pointer-x");
-
-
-            const yElement =
-                $("pointer-y");
-
-
-            if (
-                xElement
-            ) {
-
-                xElement.textContent =
-                    `X ${String(
-                        Math.round(x)
-                    ).padStart(
-                        4,
-                        "0"
-                    )}`;
-            }
-
-
-            if (
-                yElement
-            ) {
-
-                yElement.textContent =
-                    `Y ${String(
-                        Math.round(y)
-                    ).padStart(
-                        4,
-                        "0"
-                    )}`;
-            }
-        }
+        pointerMove,
+        { passive: true }
     );
 
+    fluidCanvas.addEventListener(
+        "pointerdown",
+        pointerDown
+    );
+
+    window.addEventListener(
+        "pointerup",
+        pointerUp
+    );
 
     fluidCanvas.addEventListener(
         "pointerleave",
         () => {
-
-            state.mouse.active =
+            S.mouse.active =
                 false;
         }
     );
 
 
-    /* =========================================================
-       IMAGE INPUT
-    ========================================================= */
-
-    function loadImage(
-        file
-    ) {
-
-        if (
-            !file ||
-            !file.type.startsWith(
-                "image/"
-            )
-        ) {
-            return;
-        }
-
-
-        const reader =
-            new FileReader();
-
-
-        reader.onload =
-            event => {
-
-                const image =
-                    new Image();
-
-
-                image.onload =
-                    () => {
-
-                        makeImageSource(
-                            image
-                        );
-
-
-                        const meta =
-                            $("image-meta");
-
-
-                        const name =
-                            $("image-name");
-
-
-                        if (
-                            meta
-                        ) {
-                            meta.hidden =
-                                false;
-                        }
-
-
-                        if (
-                            name
-                        ) {
-                            name.textContent =
-                                file.name;
-                        }
-
-
-                        setStatus(
-                            "IMAGE INJECTED"
-                        );
-                    };
-
-
-                image.src =
-                    event.target.result;
-            };
-
-
-        reader.readAsDataURL(
-            file
-        );
-    }
-
-
-    const fileInput =
-        $("file-input");
-
-
-    if (
-        fileInput
-    ) {
-
-        fileInput.addEventListener(
-            "change",
-            event => {
-
-                loadImage(
-                    event.target.files[0]
-                );
-            }
-        );
-    }
-
-
-    /* =========================================================
-       DROPZONE
-    ========================================================= */
-
-    const dropzone =
-        $("dropzone");
-
-
-    if (
-        dropzone
-    ) {
-
-        dropzone.addEventListener(
-            "dragover",
-            event => {
-
-                event.preventDefault();
-
-                dropzone.classList.add(
-                    "drag"
-                );
-            }
-        );
-
-
-        dropzone.addEventListener(
-            "dragleave",
-            () => {
-
-                dropzone.classList.remove(
-                    "drag"
-                );
-            }
-        );
-
-
-        dropzone.addEventListener(
-            "drop",
-            event => {
-
-                event.preventDefault();
-
-                dropzone.classList.remove(
-                    "drag"
-                );
-
-
-                loadImage(
-                    event
-                        .dataTransfer
-                        .files[0]
-                );
-            }
-        );
-    }
-
-
-    /* =========================================================
-       TEXT INPUT
-    ========================================================= */
-
-    const textInput =
-        $("text-input");
-
-
-    const textApply =
-        $("text-apply");
-
-
-    const textCount =
-        $("text-count");
-
+    /* =====================================================
+       TEXT
+       ===================================================== */
 
     function injectText() {
 
         const value =
             textInput
-                ? textInput.value
+                ? textInput.value.trim()
                 : "";
 
+        if (!value) {
+            createTextSource("MELT");
+            return;
+        }
 
-        makeTextSource(
-            value ||
-            "MELT"
-        );
-
-
-        setStatus(
-            "TEXT INJECTED"
-        );
+        createTextSource(value);
     }
 
 
-    if (
-        textApply
-    ) {
+    if (textApply) {
 
         textApply.addEventListener(
             "click",
@@ -2435,28 +2401,11 @@
     }
 
 
-    if (
-        textInput
-    ) {
-
-        textInput.addEventListener(
-            "input",
-            () => {
-
-                if (
-                    textCount
-                ) {
-
-                    textCount.textContent =
-                        `${textInput.value.length} / 120`;
-                }
-            }
-        );
-
+    if (textInput) {
 
         textInput.addEventListener(
             "keydown",
-            event => {
+            (event) => {
 
                 if (
                     event.key ===
@@ -2474,710 +2423,611 @@
     }
 
 
-    /* =========================================================
-       SOURCE TABS
-    ========================================================= */
+    /* =====================================================
+       IMAGE INPUT
+       ===================================================== */
 
-    document
-        .querySelectorAll(
-            ".source-tab"
-        )
-        .forEach(
-            tab => {
+    function loadImageFile(file) {
 
-                tab.addEventListener(
-                    "click",
-                    () => {
-
-                        const isImage =
-                            tab.id ===
-                            "tab-image";
-
-
-                        document
-                            .querySelectorAll(
-                                ".source-tab"
-                            )
-                            .forEach(
-                                item => {
-
-                                    item.classList.toggle(
-                                        "active",
-                                        item === tab
-                                    );
-                                }
-                            );
-
-
-                        const imagePanel =
-                            $("input-image");
-
-
-                        const textPanel =
-                            $("input-text");
-
-
-                        if (
-                            imagePanel
-                        ) {
-
-                            imagePanel.hidden =
-                                !isImage;
-                        }
-
-
-                        if (
-                            textPanel
-                        ) {
-
-                            textPanel.hidden =
-                                isImage;
-                        }
-                    }
-                );
-            }
-        );
-
-
-    /* =========================================================
-       MODES
-    ========================================================= */
-
-    document
-        .querySelectorAll(
-            ".mode"
-        )
-        .forEach(
-            button => {
-
-                button.addEventListener(
-                    "click",
-                    () => {
-
-                        state.mode =
-                            button.dataset.mode;
-
-
-                        document
-                            .querySelectorAll(
-                                ".mode"
-                            )
-                            .forEach(
-                                item => {
-
-                                    item.classList.toggle(
-                                        "active",
-                                        item ===
-                                        button
-                                    );
-                                }
-                            );
-
-
-                        setStatus(
-                            `${state.mode.toUpperCase()} FIELD`
-                        );
-                    }
-                );
-            }
-        );
-
-
-    /* =========================================================
-       SLIDERS
-    ========================================================= */
-
-    const turbulence =
-        $("s-turbulence");
-
-    const viscosity =
-        $("s-viscosity");
-
-    const density =
-        $("s-density");
-
-
-    function syncSliders() {
-
-        state.turbulence =
-            Number(
-                turbulence.value
-            );
-
-
-        state.viscosity =
-            Number(
-                viscosity.value
-            );
-
-
-        state.density =
-            Number(
-                density.value
-            );
-
-
-        $("turbulence-value")
-            .textContent =
-            state.turbulence;
-
-
-        $("viscosity-value")
-            .textContent =
-            state.viscosity;
-
-
-        $("density-value")
-            .textContent =
-            state.density;
-    }
-
-
-    turbulence.addEventListener(
-        "input",
-        syncSliders
-    );
-
-
-    viscosity.addEventListener(
-        "input",
-        syncSliders
-    );
-
-
-    density.addEventListener(
-        "input",
-        () => {
-
-            syncSliders();
-
-            /*
-              Rebuild source density.
-            */
-
-            buildSourcePoints();
+        if (!file) {
+            return;
         }
-    );
-
-
-    /* =========================================================
-       PALETTES
-    ========================================================= */
-
-    document
-        .querySelectorAll(
-            ".palette"
-        )
-        .forEach(
-            button => {
-
-                button.addEventListener(
-                    "click",
-                    () => {
-
-                        state.palette =
-                            button.dataset.palette;
-
-
-                        document
-                            .querySelectorAll(
-                                ".palette"
-                            )
-                            .forEach(
-                                item => {
-
-                                    item.classList.toggle(
-                                        "active",
-                                        item ===
-                                        button
-                                    );
-                                }
-                            );
-
-
-                        /*
-                          Recolor existing
-                          particles without
-                          rebuilding their positions.
-                        */
-
-                        setStatus(
-                            `${state.palette.toUpperCase()} PALETTE`
-                        );
-                    }
-                );
-            }
-        );
-
-
-    /* =========================================================
-       RESET
-    ========================================================= */
-
-    function reset() {
-
-        turbulence.value = 58;
-        viscosity.value = 32;
-        density.value = 72;
-
-
-        syncSliders();
-
-
-        state.mode =
-            "fluid";
-
-
-        state.palette =
-            "matrix";
-
-
-        document
-            .querySelectorAll(
-                ".mode"
-            )
-            .forEach(
-                item => {
-
-                    item.classList.toggle(
-                        "active",
-                        item.dataset.mode ===
-                        "fluid"
-                    );
-                }
-            );
-
-
-        document
-            .querySelectorAll(
-                ".palette"
-            )
-            .forEach(
-                item => {
-
-                    item.classList.toggle(
-                        "active",
-                        item.dataset.palette ===
-                        "matrix"
-                    );
-                }
-            );
-
-
-        makeTextSource(
-            "MELT"
-        );
-
-
-        setStatus(
-            "FIELD RESET"
-        );
-    }
-
-
-    $("btn-reset")
-        .addEventListener(
-            "click",
-            reset
-        );
-
-
-    $("brand-reset")
-        .addEventListener(
-            "click",
-            reset
-        );
-
-
-    /* =========================================================
-       SAVE
-    ========================================================= */
-
-    $("btn-save")
-        .addEventListener(
-            "click",
-            () => {
-
-                const output =
-                    document.createElement(
-                        "canvas"
-                    );
-
-
-                output.width =
-                    fluidCanvas.width;
-
-
-                output.height =
-                    fluidCanvas.height;
-
-
-                const ctx =
-                    output.getContext(
-                        "2d"
-                    );
-
-
-                ctx.fillStyle =
-                    "#020403";
-
-
-                ctx.fillRect(
-                    0,
-                    0,
-                    output.width,
-                    output.height
-                );
-
-
-                if (
-                    state.mode !==
-                    "ascii"
-                ) {
-
-                    ctx.drawImage(
-                        fluidCanvas,
-                        0,
-                        0
-                    );
-                }
-
-
-                if (
-                    state.mode !==
-                    "fluid"
-                ) {
-
-                    ctx.drawImage(
-                        asciiCanvas,
-                        0,
-                        0
-                    );
-                }
-
-
-                const link =
-                    document.createElement(
-                        "a"
-                    );
-
-
-                link.download =
-                    `MELT-${Date.now()}.png`;
-
-
-                link.href =
-                    output.toDataURL(
-                        "image/png"
-                    );
-
-
-                link.click();
-            }
-        );
-
-
-    /* =========================================================
-       PANEL
-    ========================================================= */
-
-    const panel =
-        $("control-panel");
-
-
-    $("panel-close")
-        .addEventListener(
-            "click",
-            () => {
-
-                panel.classList.add(
-                    "closed"
-                );
-            }
-        );
-
-
-    $("panel-toggle")
-        .addEventListener(
-            "click",
-            () => {
-
-                panel.classList.toggle(
-                    "closed"
-                );
-            }
-        );
-
-
-    /* =========================================================
-       STATUS
-    ========================================================= */
-
-    function setStatus(
-        text
-    ) {
-
-        const element =
-            $("status-text");
-
 
         if (
-            element
+            !file.type.startsWith(
+                "image/"
+            )
         ) {
 
-            element.textContent =
-                text;
+            statusSet(
+                "INVALID IMAGE",
+                false
+            );
+
+            return;
         }
+
+        const reader =
+            new FileReader();
+
+        reader.onload = () => {
+
+            const image =
+                new Image();
+
+            image.onload = () => {
+
+                createImageSource(
+                    image
+                );
+            };
+
+            image.src =
+                reader.result;
+        };
+
+        reader.readAsDataURL(file);
     }
 
 
-    /* =========================================================
+    if (fileInput) {
+
+        fileInput.addEventListener(
+            "change",
+            () => {
+
+                const file =
+                    fileInput.files?.[0];
+
+                loadImageFile(file);
+            }
+        );
+    }
+
+
+    if (dropzone) {
+
+        [
+            "dragenter",
+            "dragover"
+        ].forEach(
+            (eventName) => {
+
+                dropzone.addEventListener(
+                    eventName,
+                    (event) => {
+
+                        event.preventDefault();
+
+                        dropzone.classList.add(
+                            "dragging"
+                        );
+                    }
+                );
+            }
+        );
+
+        [
+            "dragleave",
+            "drop"
+        ].forEach(
+            (eventName) => {
+
+                dropzone.addEventListener(
+                    eventName,
+                    () => {
+
+                        dropzone.classList.remove(
+                            "dragging"
+                        );
+                    }
+                );
+            }
+        );
+
+        dropzone.addEventListener(
+            "drop",
+            (event) => {
+
+                event.preventDefault();
+
+                const file =
+                    event.dataTransfer
+                        ?.files?.[0];
+
+                loadImageFile(file);
+            }
+        );
+    }
+
+
+    /* =====================================================
+       MODE
+       ===================================================== */
+
+    function setMode(mode) {
+
+        if (
+            ![
+                "fluid",
+                "ascii",
+                "both"
+            ].includes(mode)
+        ) {
+            mode = "both";
+        }
+
+        S.mode =
+            mode;
+
+        modeButtons.forEach(
+            (button) => {
+
+                const buttonMode =
+                    button.dataset.mode ||
+                    button.dataset.value ||
+                    button.textContent
+                        .trim()
+                        .toLowerCase();
+
+                button.classList.toggle(
+                    "active",
+                    buttonMode === mode
+                );
+
+                button.setAttribute(
+                    "aria-pressed",
+                    buttonMode === mode
+                        ? "true"
+                        : "false"
+                );
+            }
+        );
+
+        statusSet(
+            `${mode.toUpperCase()} MODE`,
+            true
+        );
+    }
+
+
+    modeButtons.forEach(
+        (button) => {
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    const mode =
+                        button.dataset.mode ||
+                        button.dataset.value ||
+                        button.textContent
+                            .trim()
+                            .toLowerCase();
+
+                    setMode(mode);
+                }
+            );
+        }
+    );
+
+
+    /* =====================================================
+       PALETTE
+       ===================================================== */
+
+    function setPalette(name) {
+
+        if (!PALETTES[name]) {
+            return;
+        }
+
+        S.palette =
+            name;
+
+        S.paletteData =
+            PALETTES[name];
+
+        paletteButtons.forEach(
+            (button) => {
+
+                const value =
+                    button.dataset.palette ||
+                    button.dataset.value;
+
+                button.classList.toggle(
+                    "active",
+                    value === name
+                );
+            }
+        );
+
+        statusSet(
+            `${name.toUpperCase()} PALETTE`,
+            true
+        );
+    }
+
+
+    paletteButtons.forEach(
+        (button) => {
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    const value =
+                        button.dataset.palette ||
+                        button.dataset.value;
+
+                    if (value) {
+                        setPalette(value);
+                    }
+                }
+            );
+        }
+    );
+
+
+    /* =====================================================
+       SLIDERS
+       ===================================================== */
+
+    function sliderValue(input, fallback) {
+
+        if (!input) {
+            return fallback;
+        }
+
+        const value =
+            parseFloat(
+                input.value
+            );
+
+        return Number.isFinite(value)
+            ? value
+            : fallback;
+    }
+
+
+    function syncSettings() {
+
+        S.settings.turbulence =
+            sliderValue(
+                turbulenceInput,
+                CONFIG.defaultTurbulence
+            );
+
+        S.settings.viscosity =
+            sliderValue(
+                viscosityInput,
+                CONFIG.defaultViscosity
+            );
+
+        S.settings.grain =
+            sliderValue(
+                grainInput,
+                CONFIG.defaultGrain
+            );
+    }
+
+
+    [
+        turbulenceInput,
+        viscosityInput,
+        grainInput
+    ]
+        .filter(Boolean)
+        .forEach(
+            (input) => {
+
+                input.addEventListener(
+                    "input",
+                    syncSettings
+                );
+            }
+        );
+
+
+    /* =====================================================
+       RESET
+       ===================================================== */
+
+    function resetField() {
+
+        S.mouse.down =
+            false;
+
+        S.time =
+            0;
+
+        S.frame =
+            0;
+
+        S.settings.turbulence =
+            CONFIG.defaultTurbulence;
+
+        S.settings.viscosity =
+            CONFIG.defaultViscosity;
+
+        S.settings.grain =
+            CONFIG.defaultGrain;
+
+        if (turbulenceInput) {
+            turbulenceInput.value =
+                CONFIG.defaultTurbulence;
+        }
+
+        if (viscosityInput) {
+            viscosityInput.value =
+                CONFIG.defaultViscosity;
+        }
+
+        if (grainInput) {
+            grainInput.value =
+                CONFIG.defaultGrain;
+        }
+
+        createTextSource(
+            S.sourceText || "MELT"
+        );
+
+        statusSet(
+            "FIELD RESET",
+            true
+        );
+    }
+
+
+    if (resetButton) {
+
+        resetButton.addEventListener(
+            "click",
+            resetField
+        );
+    }
+
+
+    /* =====================================================
+       SAVE FRAME
+       ===================================================== */
+
+    function saveFrame() {
+
+        const output =
+            document.createElement("canvas");
+
+        output.width =
+            fluidCanvas.width;
+
+        output.height =
+            fluidCanvas.height;
+
+        const ctx =
+            output.getContext("2d");
+
+        ctx.drawImage(
+            fluidCanvas,
+            0,
+            0
+        );
+
+        if (
+            asciiCanvas &&
+            (
+                S.mode === "ascii" ||
+                S.mode === "both"
+            )
+        ) {
+
+            ctx.drawImage(
+                asciiCanvas,
+                0,
+                0
+            );
+        }
+
+        const link =
+            document.createElement("a");
+
+        link.download =
+            `melt-${Date.now()}.png`;
+
+        link.href =
+            output.toDataURL(
+                "image/png"
+            );
+
+        link.click();
+
+        statusSet(
+            "FRAME SAVED",
+            true
+        );
+    }
+
+
+    if (saveButton) {
+
+        saveButton.addEventListener(
+            "click",
+            saveFrame
+        );
+    }
+
+
+    /* =====================================================
+       PANEL
+       ===================================================== */
+
+    if (panelToggle) {
+
+        panelToggle.addEventListener(
+            "click",
+            () => {
+
+                document.body.classList.toggle(
+                    "panel-hidden"
+                );
+            }
+        );
+    }
+
+
+    /* =====================================================
        KEYBOARD
-    ========================================================= */
+       ===================================================== */
 
     window.addEventListener(
         "keydown",
-        event => {
+        (event) => {
 
             if (
-                event.ctrlKey &&
+                event.key ===
+                "Escape"
+            ) {
+
+                document.body.classList.toggle(
+                    "panel-hidden"
+                );
+            }
+
+            if (
                 event.key.toLowerCase() ===
                 "r"
             ) {
 
-                event.preventDefault();
+                resetField();
+            }
 
-                reset();
+            if (
+                event.key.toLowerCase() ===
+                "s"
+            ) {
+
+                if (
+                    event.ctrlKey ||
+                    event.metaKey
+                ) {
+                    return;
+                }
+
+                saveFrame();
             }
         }
     );
 
 
-    /* =========================================================
-       START
-    ========================================================= */
-
-    function start() {
-
-        resize();
-
-
-        /*
-          Default source.
-        */
-
-        makeTextSource(
-            "MELT"
-        );
-
-
-        buildAmbient();
-
-
-        syncSliders();
-
-
-        /*
-          Initial dark field.
-        */
-
-        fluid.fillStyle =
-            "#020403";
-
-
-        fluid.fillRect(
-            0,
-            0,
-            state.width,
-            state.height
-        );
-
-
-        /*
-          Boot sequence.
-        */
-
-        const boot =
-            $("boot");
-
-
-        const bootText =
-            $("boot-text");
-
-
-        const bootPercent =
-            $("boot-percent");
-
-
-        const progress =
-            $("boot-progress");
-
-
-        const steps = [
-            "LOADING FIELD",
-            "BUILDING PARTICLES",
-            "CALCULATING FLOW",
-            "INITIALIZING MATTER",
-            "FIELD ACTIVE"
-        ];
-
-
-        let current = 0;
-
-
-        const bootTimer =
-            setInterval(
-                () => {
-
-                    current++;
-
-
-                    if (
-                        bootText
-                    ) {
-
-                        bootText.textContent =
-                            steps[
-                                Math.min(
-                                    current,
-                                    steps.length - 1
-                                )
-                            ];
-                    }
-
-
-                    if (
-                        bootPercent
-                    ) {
-
-                        bootPercent.textContent =
-                            `${Math.min(
-                                current * 20,
-                                100
-                            )
-                            .toString()
-                            .padStart(
-                                2,
-                                "0"
-                            )}%`;
-                    }
-
-
-                    if (
-                        progress
-                    ) {
-
-                        progress.style.width =
-                            `${Math.min(
-                                current * 20,
-                                100
-                            )}%`;
-                    }
-
-
-                    if (
-                        current >= 5
-                    ) {
-
-                        clearInterval(
-                            bootTimer
-                        );
-
-
-                        setTimeout(
-                            () => {
-
-                                if (
-                                    boot
-                                ) {
-
-                                    boot.classList.add(
-                                        "done"
-                                    );
-                                }
-
-                            },
-                            300
-                        );
-                    }
-
-                },
-                180
-            );
-
-
-        requestAnimationFrame(
-            animate
-        );
-    }
-
-
-    /* =========================================================
-       RESIZE
-    ========================================================= */
+    /* =====================================================
+       WINDOW
+       ===================================================== */
 
     window.addEventListener(
         "resize",
         () => {
 
             resize();
-
-            buildAmbient();
-
-            /*
-              Rebuild the particle positions so
-              text/image remains centered.
-            */
-
-            if (
-                state.sourcePoints.length
-            ) {
-
-                rebuildParticles();
-            }
         }
     );
 
 
-    /* =========================================================
-       GO
-    ========================================================= */
+    /* =====================================================
+       INITIALIZATION
+       ===================================================== */
 
-    try {
+    function init() {
 
-        start();
-
-    } catch (error) {
-
-        console.error(
-            error
+        bootSet(
+            0.05,
+            "INITIALIZING FIELD"
         );
 
+        resize();
 
-        const errorScreen =
-            $("error");
+        bootSet(
+            0.20,
+            "CREATING SOURCE"
+        );
 
+        createSourceCanvas();
 
-        const errorText =
-            $("error-text");
+        bootSet(
+            0.35,
+            "GENERATING MATTER"
+        );
 
+        createTextSource("MELT");
 
-        if (
-            errorScreen
-        ) {
+        bootSet(
+            0.55,
+            "BUILDING PARTICLES"
+        );
 
-            errorScreen.hidden =
-                false;
+        createRibbons();
+
+        createBlocks();
+
+        createSparks();
+
+        bootSet(
+            0.72,
+            "CALCULATING FIELD"
+        );
+
+        syncSettings();
+
+        setMode("both");
+
+        setPalette("matrix");
+
+        bootSet(
+            0.88,
+            "STARTING EFFECTS"
+        );
+
+        statusSet(
+            "FIELD ONLINE",
+            true
+        );
+
+        bootSet(
+            1,
+            "FIELD ONLINE"
+        );
+
+        if (boot) {
+
+            setTimeout(
+                () => {
+
+                    boot.classList.add(
+                        "done"
+                    );
+
+                },
+                350
+            );
         }
 
+        S.initialized =
+            true;
 
-        if (
-            errorText
-        ) {
+        S.booted =
+            true;
 
-            errorText.textContent =
-                error.message;
-        }
+        S.lastTime =
+            performance.now();
+
+        requestAnimationFrame(
+            frame
+        );
     }
+
+
+    /* =====================================================
+       START
+       ===================================================== */
+
+    init();
 
 })();
